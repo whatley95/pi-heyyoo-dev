@@ -1,11 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { readFileSync } from "node:fs";
 import { loadHeyyooConfig } from "./config.js";
 import { callSecondaryModel } from "./secondary-model.js";
 import { getDiff, getVcsInfo } from "./diff-grabber.js";
 
-const VERSION = "0.2.0";
-const HOMEPAGE = "https://whatley.xyz";
+const { version: VERSION, homepage: HOMEPAGE = "https://whatley.xyz" } = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+) as { version: string; homepage?: string };
 import {
   buildPlanPrompt,
   buildReviewPrompt,
@@ -501,7 +503,7 @@ export default function (pi: ExtensionAPI) {
         `pi-heyyoo v${VERSION}`,
         HOMEPAGE,
         "",
-        `Model: ${modelLine}`,
+        `Secondary: ${modelLine}`,
         `Plan: ${planLine}`,
         `VCS: ${vcsLine}`,
         `Cost: ${formatCost(cost.costUsd)} (${cost.calls} calls)`,
