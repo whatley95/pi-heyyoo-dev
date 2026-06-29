@@ -479,40 +479,61 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yoo", {
-    description: "Show yoo pair-programmer status card",
-    handler: async (_args, ctx) => {
-      const config = loadHeyyooConfig(ctx.cwd);
-      const state = getState(ctx.cwd);
-      const cost = getSessionCost(ctx.cwd);
-      const conventions = loadConventions(ctx.cwd);
-      const vcs = getVcsInfo(ctx.cwd);
+    description: "Run a yoo action or show status. Usage: /yoo [plan|review|suggest|recommend|judge|scan|status] [args]",
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      if (!trimmed) {
+        await showYooStatus(ctx);
+        return;
+      }
 
-      const modelLine = config.secondary.provider && config.secondary.id
-        ? `${config.secondary.provider}:${config.secondary.id}${config.secondary.thinking ? ` • ${config.secondary.thinking}` : ""}`
-        : "not configured";
+      const [subcommand, ...rest] = trimmed.split(/\s+/);
+      const restText = rest.join(" ").trim();
+      const signal = undefined;
 
-      const planLine = state.plan
-        ? `${state.completedSteps}/${state.totalSteps} steps — ${state.plan.summary}`
-        : "no active plan";
+      let result: YooToolResult;
+      try {
+        switch (subcommand.toLowerCase()) {
+          case "status":
+            await showYooStatus(ctx);
+            return;
+          case "plan":
+            if (!restText) {
+              ctx.ui.notify("Usage: /yoo plan <task description>", "warn");
+              return;
+            }
+            result = await executeYooPlan(ctx.cwd, restText, signal);
+            break;
+          case "review":
+            result = await executeYooReview(ctx.cwd, restText || "review changes", ctx, {}, signal);
+            break;
+          case "suggest":
+            if (!restText) {
+              ctx.ui.notify("Usage: /yoo suggest <question>", "warn");
+              return;
+            }
+            result = await executeYooSuggest(ctx.cwd, restText, signal);
+            break;
+          case "recommend":
+            result = await executeYooRecommend(ctx.cwd, restText || "what next", signal);
+            break;
+          case "judge":
+            result = await executeYooJudge(ctx.cwd, restText || "all done", signal);
+            break;
+          case "scan":
+            result = await executeYooScan(ctx.cwd, signal);
+            break;
+          default:
+            ctx.ui.notify(`Unknown /yoo subcommand: ${subcommand}. Try /yoo status`, "warn");
+            return;
+        }
+      } catch (err) {
+        ctx.ui.notify(`yoo error: ${err instanceof Error ? err.message : String(err)}`, "error");
+        return;
+      }
 
-      const vcsLine = vcs.type === "unknown"
-        ? "no VCS"
-        : `${vcs.type}${vcs.branch ? ` • ${vcs.branch}` : ""}${vcs.revision ? ` • ${vcs.revision.slice(0, 8)}` : ""}${vcs.dirty ? " • dirty" : ""}`;
-
-      const lines = [
-        `pi-heyyoo v${VERSION}`,
-        HOMEPAGE,
-        "",
-        `Secondary: ${modelLine}`,
-        `Plan: ${planLine}`,
-        `VCS: ${vcsLine}`,
-        `Cost: ${formatCost(cost.costUsd)} (${cost.calls} calls)`,
-        conventions ? `Conventions: ${conventions.stack} (${conventions.naming})` : "Conventions: not scanned",
-        "",
-        "/yoo-status · detailed diagnostics  /yoo-model · pick model  /yoo-clear · reset",
-      ];
-
-      await ctx.ui.select("yoo status", lines);
+      const text = formatResultText(result);
+      ctx.ui.notify(text.slice(0, 500), result.error ? "error" : "info");
     },
   });
 
@@ -614,77 +635,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("yoo-status", {
     description: "Show detailed yoo status (config, plan, VCS, conventions, memory)",
     handler: async (_args, ctx) => {
-      const config = loadHeyyooConfig(ctx.cwd);
-      const state = getState(ctx.cwd);
-      const cost = getSessionCost(ctx.cwd);
-      const conventions = loadConventions(ctx.cwd);
-      const vcs = getVcsInfo(ctx.cwd);
-
-      const lines = [
-        `pi-heyyoo v${VERSION}`,
-        HOMEPAGE,
-        "",
-        "Configuration:",
-        config.secondary.provider && config.secondary.id
-          ? `  Secondary model: ${config.secondary.provider}:${config.secondary.id}`
-          : "  Secondary model: not configured",
-        config.secondary.thinking ? `  Thinking level: ${config.secondary.thinking}` : "",
-        `  Auto-judge: ${config.autoJudge ? "enabled" : "disabled"}`,
-        config.preReviewCommands && config.preReviewCommands.length > 0
-          ? `  Pre-review commands: ${config.preReviewCommands.join(", ")}`
-          : "  Pre-review commands: none",
-        "",
-        "Session:",
-        `  Cost: ${formatCost(cost.costUsd)} (${cost.calls} call${cost.calls === 1 ? "" : "s"})`,
-        `  Review rounds this step: ${state.reviewRounds}`,
-        "",
-        "Plan:",
-        state.plan
-          ? `  Summary: ${state.plan.summary}`
-          : "  No active plan",
-      ];
-
-      if (state.plan) {
-        lines.push(`  Progress: ${state.completedSteps}/${state.totalSteps} steps completed`);
-        for (let i = 0; i < state.plan.todo.length; i++) {
-          lines.push(`    ${state.completedSteps > i ? "✓" : "·"} ${state.plan.todo[i]}`);
-        }
-        if (state.plan.acceptanceCriteria.length > 0) {
-          lines.push("  Acceptance criteria:");
-          for (const c of state.plan.acceptanceCriteria) {
-            lines.push(`    · ${c}`);
-          }
-        }
-      }
-
-      lines.push("", "Version control:");
-      if (vcs.type === "unknown") {
-        lines.push("  No git or svn repository detected");
-      } else {
-        lines.push(`  Type: ${vcs.type}`);
-        if (vcs.branch) lines.push(`  Branch/URL: ${vcs.branch}`);
-        if (vcs.revision) lines.push(`  Revision: ${vcs.revision}`);
-        if (vcs.dirty !== undefined) lines.push(`  Dirty: ${vcs.dirty ? "yes" : "no"}`);
-        if (vcs.error) lines.push(`  Error: ${vcs.error}`);
-      }
-
-      lines.push("", "Project conventions:");
-      if (conventions) {
-        lines.push(`  Stack: ${conventions.stack}`);
-        lines.push(`  Naming: ${conventions.naming}`);
-        lines.push(`  Structure: ${conventions.structure}`);
-        lines.push(`  Patterns: ${conventions.patterns.length > 0 ? conventions.patterns.join("; ") : "none"}`);
-        lines.push(`  Scanned at: ${conventions.generatedAt}`);
-      } else {
-        lines.push("  Not scanned — run yoo({ scan: true })");
-      }
-
-      lines.push(
-        "",
-        `${HOMEPAGE} · pi-heyyoo v${VERSION}`,
-      );
-
-      await ctx.ui.select("yoo status", lines.filter(Boolean));
+      await showYooStatus(ctx);
     },
   });
 
@@ -706,6 +657,80 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("yoo plan, state, cost, memory, and conventions cleared.", "info");
     },
   });
+}
+
+async function showYooStatus(ctx: ExtensionContext): Promise<void> {
+  const config = loadHeyyooConfig(ctx.cwd);
+  const state = getState(ctx.cwd);
+  const cost = getSessionCost(ctx.cwd);
+  const conventions = loadConventions(ctx.cwd);
+  const vcs = getVcsInfo(ctx.cwd);
+
+  const lines = [
+    `pi-heyyoo v${VERSION}`,
+    HOMEPAGE,
+    "",
+    "Configuration:",
+    config.secondary.provider && config.secondary.id
+      ? `  Secondary model: ${config.secondary.provider}:${config.secondary.id}`
+      : "  Secondary model: not configured",
+    config.secondary.thinking ? `  Thinking level: ${config.secondary.thinking}` : "",
+    `  Auto-judge: ${config.autoJudge ? "enabled" : "disabled"}`,
+    config.preReviewCommands && config.preReviewCommands.length > 0
+      ? `  Pre-review commands: ${config.preReviewCommands.join(", ")}`
+      : "  Pre-review commands: none",
+    "",
+    "Session:",
+    `  Cost: ${formatCost(cost.costUsd)} (${cost.calls} call${cost.calls === 1 ? "" : "s"})`,
+    `  Review rounds this step: ${state.reviewRounds}`,
+    "",
+    "Plan:",
+    state.plan
+      ? `  Summary: ${state.plan.summary}`
+      : "  No active plan",
+  ];
+
+  if (state.plan) {
+    lines.push(`  Progress: ${state.completedSteps}/${state.totalSteps} steps completed`);
+    for (let i = 0; i < state.plan.todo.length; i++) {
+      lines.push(`    ${state.completedSteps > i ? "✓" : "·"} ${state.plan.todo[i]}`);
+    }
+    if (state.plan.acceptanceCriteria.length > 0) {
+      lines.push("  Acceptance criteria:");
+      for (const c of state.plan.acceptanceCriteria) {
+        lines.push(`    · ${c}`);
+      }
+    }
+  }
+
+  lines.push("", "Version control:");
+  if (vcs.type === "unknown") {
+    lines.push("  No git or svn repository detected");
+  } else {
+    lines.push(`  Type: ${vcs.type}`);
+    if (vcs.branch) lines.push(`  Branch/URL: ${vcs.branch}`);
+    if (vcs.revision) lines.push(`  Revision: ${vcs.revision}`);
+    if (vcs.dirty !== undefined) lines.push(`  Dirty: ${vcs.dirty ? "yes" : "no"}`);
+    if (vcs.error) lines.push(`  Error: ${vcs.error}`);
+  }
+
+  lines.push("", "Project conventions:");
+  if (conventions) {
+    lines.push(`  Stack: ${conventions.stack}`);
+    lines.push(`  Naming: ${conventions.naming}`);
+    lines.push(`  Structure: ${conventions.structure}`);
+    lines.push(`  Patterns: ${conventions.patterns.length > 0 ? conventions.patterns.join("; ") : "none"}`);
+    lines.push(`  Scanned at: ${conventions.generatedAt}`);
+  } else {
+    lines.push("  Not scanned — run yoo({ scan: true })");
+  }
+
+  lines.push(
+    "",
+    `${HOMEPAGE} · pi-heyyoo v${VERSION}`,
+  );
+
+  await ctx.ui.select("yoo status", lines.filter(Boolean));
 }
 
 function formatResultText(result: YooToolResult): string {
