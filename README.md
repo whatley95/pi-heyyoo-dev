@@ -57,6 +57,7 @@ The `yoo` tool is called by the main agent during development:
 | Command | What it does |
 |---------|-------------|
 | `/yoo` | Show current configuration and session plan status |
+| `/yoo-model` | Interactively pick the secondary model from configured providers |
 | `/yoo-config <provider.model>` | Guide for configuring the secondary model |
 
 ## Flow

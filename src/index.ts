@@ -325,7 +325,8 @@ export default function (pi: ExtensionAPI) {
           ? `  ${state.plan.todo.map((t, i) => `${state.completedSteps > i ? " ✓" : " ·"} ${t}`).join("\n  ")}`
           : "",
         "",
-        "Configure: /yoo config <provider.model>",
+        "Configure: /yoo-model to interactively pick a model",
+        "          /yoo-config <provider.model> for quick setup",
       ];
 
       await ctx.ui.select("yoo status", lines.filter(Boolean));
@@ -339,6 +340,87 @@ export default function (pi: ExtensionAPI) {
       if (args.trim()) {
         ctx.ui.notify(`Suggested: ${args.trim()}`, "info");
       }
+    },
+  });
+
+  pi.registerCommand("yoo-model", {
+    description: "Interactively pick the secondary model for yoo",
+    handler: async (_args, ctx) => {
+      const registry = ctx.modelRegistry as unknown as {
+        getAvailable(): Array<{ id: string; provider: string }>;
+        getAll?(): Array<{ id: string; provider: string }>;
+        getProviderAuthStatus(provider: string): { configured: boolean };
+        hasConfiguredAuth(model: { provider: string }): boolean;
+      };
+
+      const allModels = typeof registry.getAll === "function" ? registry.getAll() : registry.getAvailable();
+
+      const configuredModels = allModels.filter((m) => {
+        try {
+          return registry.getProviderAuthStatus(m.provider).configured;
+        } catch {
+          return registry.hasConfiguredAuth(m);
+        }
+      });
+
+      if (configuredModels.length === 0) {
+        ctx.ui.notify("No configured models found. Run /login first.", "error");
+        return;
+      }
+
+      const providers = [...new Set(configuredModels.map((m) => m.provider))].sort();
+      let provider: string;
+      if (providers.length === 1) {
+        provider = providers[0];
+      } else {
+        const picked = await ctx.ui.select(
+          "Pick provider:",
+          providers.map((p) => {
+            const count = configuredModels.filter((m) => m.provider === p).length;
+            return `${p} (${count} models)`;
+          }),
+        );
+        if (!picked) return;
+        provider = picked.split(" ")[0];
+      }
+
+      const providerModels = configuredModels.filter((m) => m.provider === provider).sort((a, b) => a.id.localeCompare(b.id));
+      const modelItems = providerModels.map((m) => m.id);
+      const currentConfig = loadHeyyooConfig(ctx.cwd);
+      const isCurrent = currentConfig.secondary.provider === provider && currentConfig.secondary.id;
+      if (isCurrent) {
+        const idx = modelItems.indexOf(currentConfig.secondary.id);
+        if (idx >= 0) {
+          modelItems[idx] = `${modelItems[idx]} ✓ current`;
+        }
+      }
+
+      const modelIdPicked = await ctx.ui.select(`Pick model for ${provider}:`, modelItems);
+      if (!modelIdPicked) return;
+      const modelId = modelIdPicked.replace(" ✓ current", "");
+
+      const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+      const currentThinking = currentConfig.secondary.thinking ?? "xhigh";
+      const thinkingItems = thinkingLevels.map((t) => `${t}${t === currentThinking && isCurrent && currentConfig.secondary.id === modelId ? " ✓ current" : ""}`);
+      const thinkingPicked = await ctx.ui.select("Pick thinking level:", thinkingItems);
+      if (!thinkingPicked) return;
+      const thinking = thinkingPicked.replace(" ✓ current", "");
+
+      const { existsSync, readFileSync, writeFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const agentDir = (await import("@earendil-works/pi-coding-agent")).getAgentDir();
+      const settingsPath = join(agentDir, "settings.json");
+      let settings: Record<string, unknown> = {};
+      if (existsSync(settingsPath)) {
+        settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      }
+      if (!settings["pi-heyyoo"]) settings["pi-heyyoo"] = {};
+      (settings["pi-heyyoo"] as Record<string, unknown>).secondary = {
+        provider, id: modelId, thinking,
+      };
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+
+      ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}). /reload to apply.`, "info");
     },
   });
 }
