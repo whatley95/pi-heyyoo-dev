@@ -19,6 +19,7 @@ import {
 import { renderCall, renderResult } from "./render.js";
 import { loadState, saveState, clearState } from "./plan-store.js";
 import type { YooToolParams, YooToolResult, HeyyooSessionState, PlanResult } from "./types.js";
+import { createLoopDetectionState, recordToolCall, checkLoop, shouldSendSteer } from "./loop-detector.js";
 
 const sessionStates = new Map<string, HeyyooSessionState>();
 
@@ -259,6 +260,7 @@ async function executeYooJudge(
 
 export default function (pi: ExtensionAPI) {
   let cwd = process.cwd();
+  const loopState = createLoopDetectionState();
 
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd;
@@ -270,6 +272,18 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, _ctx) => {
     sessionStates.delete(cwd);
+  });
+
+  pi.on("tool_execution_start", async (event, _ctx) => {
+    try {
+      recordToolCall(loopState, event);
+      const loop = checkLoop(loopState);
+      if (loop && shouldSendSteer(loopState, loop)) {
+        pi.sendUserMessage(loop.message, { deliverAs: "steer" });
+      }
+    } catch {
+      // best-effort loop detection
+    }
   });
 
   pi.registerTool({
