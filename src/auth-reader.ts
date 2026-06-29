@@ -64,9 +64,6 @@ const PROVIDER_ENV_MAP: Record<string, string> = {
   "fireworks": "FIREWORKS_API_KEY",
   "cerebras": "CEREBRAS_API_KEY",
   "google": "GEMINI_API_KEY",
-  "nvidia": "NVIDIA_API_KEY",
-  "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
-  "huggingface": "HF_TOKEN",
 };
 
 function providerToEnvVar(provider: string): string | undefined {

@@ -75,6 +75,9 @@ export interface YooToolParams {
   scan?: boolean;
   files?: string[];
   exclude?: string[];
+  revision?: string;
+  since?: string;
+  vcs?: "git" | "svn";
 }
 
 export interface YooToolResult {
@@ -107,6 +110,7 @@ export interface ProviderApiInfo {
   baseUrl: string;
   authHeader: string;
   authPrefix: string;
+  queryAuthKey?: string;
 }
 
 export interface MemoryEntry {

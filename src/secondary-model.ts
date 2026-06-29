@@ -76,9 +76,10 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
   },
   "google": {
     style: "openai-compatible",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    authHeader: "x-goog-api-key",
-    authPrefix: "",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    queryAuthKey: "key",
   },
 };
 
@@ -151,9 +152,9 @@ async function callOpenAiCompatibleApi(
   userPrompt: string,
   signal?: AbortSignal,
 ): Promise<{ content: string; usage: UsageCost }> {
-  const url = `${apiInfo.baseUrl}/chat/completions`;
+  const url = buildOpenAiUrl(apiInfo, apiKey);
 
-  const body = {
+  const body: Record<string, unknown> = {
     model,
     messages: [
       { role: "system", content: systemPrompt },
@@ -162,11 +163,12 @@ async function callOpenAiCompatibleApi(
     temperature: 0.3,
     max_tokens: 2048,
   };
+  if (supportsMaxCompletionTokens(provider, model)) {
+    delete body.max_tokens;
+    body.max_completion_tokens = 2048;
+  }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    [apiInfo.authHeader]: `${apiInfo.authPrefix}${apiKey}`,
-  };
+  const headers = buildOpenAiHeaders(apiInfo, apiKey);
 
   const response = await fetch(url, {
     method: "POST",
@@ -198,6 +200,41 @@ async function callOpenAiCompatibleApi(
   usage.estimatedCostUsd = estimateCost(provider, model, usage.estimatedInputTokens, usage.estimatedOutputTokens);
 
   return { content, usage };
+}
+
+function buildOpenAiUrl(apiInfo: ProviderApiInfo, apiKey: string): string {
+  const base = apiInfo.baseUrl.replace(/\/$/, "");
+  const url = new URL(`${base}/chat/completions`);
+  if (apiInfo.queryAuthKey) {
+    url.searchParams.set(apiInfo.queryAuthKey, apiKey);
+  }
+  return url.toString();
+}
+
+function buildOpenAiHeaders(apiInfo: ProviderApiInfo, apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (!apiInfo.queryAuthKey) {
+    headers[apiInfo.authHeader] = `${apiInfo.authPrefix}${apiKey}`;
+  }
+  return headers;
+}
+
+function supportsMaxCompletionTokens(provider: string, model: string): boolean {
+  const key = `${provider}:${model}`.toLowerCase();
+  const known = new Set([
+    "openai:o1",
+    "openai:o1-mini",
+    "openai:o3",
+    "openai:o3-mini",
+    "openai:o4",
+    "openai:o4-mini",
+    "openai:gpt-4.5",
+    "openai:gpt-5",
+    "openai:gpt-5-mini",
+  ]);
+  return known.has(key) || model.toLowerCase().startsWith("o") || model.toLowerCase().startsWith("gpt-5");
 }
 
 async function callAnthropicApi(
