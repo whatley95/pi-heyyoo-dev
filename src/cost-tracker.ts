@@ -40,7 +40,7 @@ function saveCost(cwd: string, log: CostLog): void {
   writeFileSync(getCostPath(cwd), JSON.stringify(log, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
-export function recordCost(cwd: string, usage: UsageCost): UsageCost {
+export function recordCost(cwd: string, usage: UsageCost, budgetUsd?: number): UsageCost {
   const log = loadCost(cwd);
   log.calls++;
   log.inputTokens += usage.estimatedInputTokens;
@@ -49,10 +49,19 @@ export function recordCost(cwd: string, usage: UsageCost): UsageCost {
   log.updatedAt = new Date().toISOString();
   saveCost(cwd, log);
 
-  return {
+  const result = {
     ...usage,
     sessionCostUsd: log.costUsd,
   };
+
+  if (budgetUsd && log.costUsd > budgetUsd) {
+    throw new Error(
+      `yoo cost budget exceeded: ${formatCost(log.costUsd)} / ${formatCost(budgetUsd)}. ` +
+        `Increase pi-heyyoo.costBudgetUsd in settings or reset with /yoo-clear.`,
+    );
+  }
+
+  return result;
 }
 
 export function getSessionCost(cwd: string): CostLog {

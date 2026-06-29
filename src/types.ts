@@ -6,6 +6,7 @@ export interface HeyyooConfig {
   };
   autoJudge?: boolean;
   preReviewCommands?: string[];
+  costBudgetUsd?: number;
 }
 
 export interface PlanResult {
@@ -64,7 +65,7 @@ export interface HeyyooSessionState {
   reviewRounds: number;
 }
 
-export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan";
+export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan" | "fix";
 
 export interface YooToolParams {
   plan?: string;
@@ -73,11 +74,13 @@ export interface YooToolParams {
   recommend?: string;
   judge?: string;
   scan?: boolean;
+  fix?: boolean;
   files?: string[];
   exclude?: string[];
   revision?: string;
   since?: string;
   vcs?: "git" | "svn";
+  untracked?: boolean;
 }
 
 export interface YooToolResult {
@@ -88,6 +91,7 @@ export interface YooToolResult {
   recommend?: RecommendResult;
   judge?: JudgeResult;
   scan?: ScanResult;
+  fix?: FixResult;
   error?: string;
   cost?: UsageCost;
 }
@@ -123,10 +127,27 @@ export interface Conventions {
   structure: string;
   patterns: string[];
   stack: string;
+  testing?: string;
+  orm?: string;
+  ui?: string;
+  styling?: string;
+  buildTool?: string;
+  ci?: string;
+  packageManager?: string;
+  entryPoints: string[];
+  scripts: string[];
+  styleSample?: string;
+  agENTSmd?: string;
   generatedAt: string;
 }
 
 export interface ScanResult {
   conventions: Conventions;
+  files: string[];
+}
+
+export interface FixResult {
+  patch: string;
+  explanation: string;
   files: string[];
 }
