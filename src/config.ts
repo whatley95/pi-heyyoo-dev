@@ -60,5 +60,6 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     },
     autoJudge: typeof o.autoJudge === "boolean" ? o.autoJudge : base.autoJudge,
     preReviewCommands: Array.isArray(o.preReviewCommands) ? o.preReviewCommands.map(String) : base.preReviewCommands,
+    costBudgetUsd: typeof o.costBudgetUsd === "number" ? o.costBudgetUsd : base.costBudgetUsd,
   };
 }

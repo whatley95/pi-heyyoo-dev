@@ -56,6 +56,7 @@ export function getDiff(
     since?: string;
     files?: string[];
     exclude?: string[];
+    untracked?: boolean;
   } = {},
 ): DiffResult {
   const vcs = options.vcs ?? detectVcs(cwd);
@@ -72,6 +73,7 @@ export function getGitDiff(
     since?: string;
     files?: string[];
     exclude?: string[];
+    untracked?: boolean;
   } = {},
 ): DiffResult {
   const pathArgs = buildGitPathArgs(options.files, options.exclude);
@@ -86,6 +88,13 @@ export function getGitDiff(
     const diff = runVcsDiff(cwd, ["git", "diff", "--", ...pathArgs]);
     if (diff.trim()) return processDiff(diff, "git");
   } catch { /* ignore */ }
+
+  if (options.untracked) {
+    try {
+      const untracked = runVcsDiff(cwd, ["git", "diff", "--no-index", "/dev/null", ...pathArgs]);
+      if (untracked.trim()) return processDiff(untracked, "git");
+    } catch { /* ignore */ }
+  }
 
   return { diff: "(no changes detected — review session context instead)", truncated: false, changedFiles: [], vcs: "git" };
 }

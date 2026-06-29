@@ -15,6 +15,7 @@ import {
   buildRecommendPrompt,
   buildJudgePrompt,
   buildScanPrompt,
+  buildFixPrompt,
   parseJsonResponse,
   validatePlanResult,
   validateReviewResult,
@@ -22,10 +23,11 @@ import {
   validateRecommendResult,
   validateJudgeResult,
   validateConventionsResult,
+  validateFixResult,
 } from "./prompts.js";
 import { renderCall, renderResult } from "./render.js";
 import { loadState, saveState, clearState } from "./plan-store.js";
-import type { YooToolParams, YooToolResult, HeyyooSessionState, PlanResult, YooAction } from "./types.js";
+import type { YooToolParams, YooToolResult, HeyyooSessionState, PlanResult, YooAction, ReviewIssue, UsageCost } from "./types.js";
 import { createLoopDetectionState, recordToolCall, checkLoop, shouldSendSteer } from "./loop-detector.js";
 import { recordCost, getSessionCost, formatCost, resetCost } from "./cost-tracker.js";
 import { recordIssues, getPastIssuesForFiles, clearMemory } from "./review-memory.js";
@@ -154,11 +156,11 @@ async function executeYooPlan(
   const plan = validatePlanResult(parsed);
 
   if (!plan) {
-    return { action: "plan", error: "Failed to parse plan from secondary model response.", plan: { todo: [task], acceptanceCriteria: [], summary: raw.slice(0, 200) }, cost: recordCost(cwd, usage) };
+    return { action: "plan", error: "Failed to parse plan from secondary model response.", plan: { todo: [task], acceptanceCriteria: [], summary: raw.slice(0, 200) }, cost: recordCostWithBudget(cwd, usage) };
   }
 
   setPlan(cwd, plan);
-  return { action: "plan", plan, cost: recordCost(cwd, usage) };
+  return { action: "plan", plan, cost: recordCostWithBudget(cwd, usage) };
 }
 
 async function executeYooReview(
@@ -171,6 +173,7 @@ async function executeYooReview(
     revision?: string;
     since?: string;
     vcs?: "git" | "svn";
+    untracked?: boolean;
   } = {},
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
@@ -212,7 +215,7 @@ async function executeYooReview(
   const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
   const parsed = parseJsonResponse(raw);
   const review = validateReviewResult(parsed);
-  const cost = recordCost(cwd, usage);
+  const cost = recordCostWithBudget(cwd, usage);
 
   if (!review) {
     return { action: "review", error: "Failed to parse review from secondary model response.", review: { verdict: "needs-work", issues: [], suggestions: [], consensus: false }, cost };
@@ -266,10 +269,10 @@ async function executeYooSuggest(
   const suggest = validateSuggestResult(parsed);
 
   if (!suggest) {
-    return { action: "suggest", error: "Failed to parse suggestions from secondary model response.", cost: recordCost(cwd, usage) };
+    return { action: "suggest", error: "Failed to parse suggestions from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
   }
 
-  return { action: "suggest", suggest, cost: recordCost(cwd, usage) };
+  return { action: "suggest", suggest, cost: recordCostWithBudget(cwd, usage) };
 }
 
 async function executeYooRecommend(
@@ -292,10 +295,10 @@ async function executeYooRecommend(
   const recommend = validateRecommendResult(parsed);
 
   if (!recommend) {
-    return { action: "recommend", error: "Failed to parse recommendation from secondary model response.", cost: recordCost(cwd, usage) };
+    return { action: "recommend", error: "Failed to parse recommendation from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
   }
 
-  return { action: "recommend", recommend, cost: recordCost(cwd, usage) };
+  return { action: "recommend", recommend, cost: recordCostWithBudget(cwd, usage) };
 }
 
 async function executeYooJudge(
@@ -316,10 +319,60 @@ async function executeYooJudge(
   const judge = validateJudgeResult(parsed);
 
   if (!judge) {
-    return { action: "judge", error: "Failed to parse judgment from secondary model response.", cost: recordCost(cwd, usage) };
+    return { action: "judge", error: "Failed to parse judgment from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
   }
 
-  return { action: "judge", judge, cost: recordCost(cwd, usage) };
+  return { action: "judge", judge, cost: recordCostWithBudget(cwd, usage) };
+}
+
+async function executeYooFix(
+  cwd: string,
+  description: string,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<YooToolResult> {
+  const config = loadHeyyooConfig(cwd);
+  if (!config.secondary.provider || !config.secondary.id) {
+    return { action: "fix", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
+  }
+
+  const { diff, truncated } = getDiff(cwd, {});
+  const memoryContext = getPastIssuesForFiles(cwd, []);
+  const issues = memoryContext
+    ? parseMemoryIssues(memoryContext)
+    : [];
+
+  if (issues.length === 0) {
+    return { action: "fix", error: "No recorded issues to fix. Run yoo.review first." };
+  }
+
+  const conventions = loadConventions(cwd);
+  const conventionsText = conventions ? formatConventions(conventions) : "";
+
+  const { system, user } = buildFixPrompt(description, diff, issues, truncated, conventionsText);
+  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+  const parsed = parseJsonResponse(raw);
+  const fix = validateFixResult(parsed);
+
+  if (!fix) {
+    return { action: "fix", error: "Failed to parse fix patch from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
+  }
+
+  return { action: "fix", fix, cost: recordCostWithBudget(cwd, usage) };
+}
+
+function parseMemoryIssues(memoryContext: string): ReviewIssue[] {
+  const issues: ReviewIssue[] = [];
+  const regex = /^\s*- \[(\w+)\]\s*(.+)$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(memoryContext)) !== null) {
+    const severity = match[1] as ReviewIssue["severity"];
+    const issue = match[2];
+    if (["high", "medium", "low"].includes(severity)) {
+      issues.push({ severity, issue, suggestion: "" });
+    }
+  }
+  return issues;
 }
 
 async function executeYooScan(
@@ -349,7 +402,12 @@ async function executeYooScan(
     saveConventions(cwd, llmConventions);
   }
 
-  return { action: "scan", scan: { conventions, files: localScan.files }, cost: recordCost(cwd, usage) };
+  return { action: "scan", scan: { conventions, files: localScan.files }, cost: recordCostWithBudget(cwd, usage) };
+}
+
+function recordCostWithBudget(cwd: string, usage: UsageCost): UsageCost {
+  const config = loadHeyyooConfig(cwd);
+  return recordCost(cwd, usage, config.costBudgetUsd);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -434,6 +492,12 @@ export default function (pi: ExtensionAPI) {
       vcs: Type.Optional(Type.Union([Type.Literal("git"), Type.Literal("svn")], {
         description: "Version control system to use for diff. Auto-detected if omitted.",
       })),
+      fix: Type.Optional(Type.Boolean({
+        description: "If true, generate a patch to fix the most recent review issues.",
+      })),
+      untracked: Type.Optional(Type.Boolean({
+        description: "For review: include untracked (new) files in the diff.",
+      })),
     }),
     renderCall,
     renderResult,
@@ -441,9 +505,9 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const p = params as unknown as YooToolParams;
 
-      if (!p.plan && !p.review && !p.suggest && !p.recommend && !p.judge && !p.scan) {
+      if (!p.plan && !p.review && !p.suggest && !p.recommend && !p.judge && !p.scan && !p.fix) {
         return {
-          content: [{ type: "text", text: "yoo: No action specified. Provide one of: plan, review, suggest, recommend, judge, or scan." }],
+          content: [{ type: "text", text: "yoo: No action specified. Provide one of: plan, review, suggest, recommend, judge, scan, or fix." }],
           isError: true,
         };
       }
@@ -460,6 +524,7 @@ export default function (pi: ExtensionAPI) {
             revision: p.revision,
             since: p.since,
             vcs: p.vcs,
+            untracked: p.untracked,
           }, signal);
         } else if (p.suggest) {
           result = await executeYooSuggest(ctx.cwd, p.suggest, signal);
@@ -469,11 +534,13 @@ export default function (pi: ExtensionAPI) {
           result = await executeYooJudge(ctx.cwd, p.judge, signal);
         } else if (p.scan) {
           result = await executeYooScan(ctx.cwd, signal);
+        } else if (p.fix) {
+          result = await executeYooFix(ctx.cwd, p.review || "fix recent issues", ctx, signal);
         } else {
           result = { action: "plan", error: "Unknown action" };
         }
       } catch (err) {
-        const action: YooAction = p.plan ? "plan" : p.review ? "review" : p.suggest ? "suggest" : p.recommend ? "recommend" : p.judge ? "judge" : "scan";
+        const action: YooAction = p.plan ? "plan" : p.review ? "review" : p.suggest ? "suggest" : p.recommend ? "recommend" : p.judge ? "judge" : p.scan ? "scan" : "fix";
         result = { action, error: err instanceof Error ? err.message : String(err) };
       }
 
@@ -531,6 +598,9 @@ export default function (pi: ExtensionAPI) {
             break;
           case "scan":
             result = await executeYooScan(ctx.cwd, signal);
+            break;
+          case "fix":
+            result = await executeYooFix(ctx.cwd, restText || "fix recent issues", ctx, signal);
             break;
           default:
             ctx.ui.notify(`Unknown /yoo subcommand: ${subcommand}. Try /yoo status`, "warn");
@@ -868,6 +938,23 @@ function formatResultText(result: YooToolResult): string {
     lines.push(formatConventions(result.scan.conventions));
     lines.push("");
     lines.push(`Scanned ${result.scan.files.length} files.`);
+  }
+
+  if (result.fix) {
+    lines.push("## yoo fix");
+    lines.push("");
+    lines.push(result.fix.explanation);
+    if (result.fix.files.length > 0) {
+      lines.push("");
+      lines.push(`**Files:** ${result.fix.files.join(", ")}`);
+    }
+    if (result.fix.patch) {
+      lines.push("");
+      lines.push("### Patch");
+      lines.push("```diff");
+      lines.push(result.fix.patch);
+      lines.push("```");
+    }
   }
 
   return lines.join("\n") + costLine;

@@ -1,4 +1,4 @@
-import type { PlanResult, ReviewResult, SuggestResult, RecommendResult, JudgeResult, Conventions } from "./types.js";
+import type { PlanResult, ReviewResult, ReviewIssue, SuggestResult, RecommendResult, JudgeResult, Conventions } from "./types.js";
 
 export function buildPlanPrompt(task: string, conventions?: string): { system: string; user: string } {
   const conventionsBlock = conventions
@@ -106,6 +106,41 @@ Rules:
 - Be strict but fair — flag real problems, not preferences`,
 
     user: `Review this code change. The developer says:\n\n${description}${vcsLine}\n\n<diff>\n${diff}\n</diff>${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}`,
+  };
+}
+
+export function buildFixPrompt(
+  description: string,
+  diff: string,
+  issues: ReviewIssue[],
+  truncated: boolean,
+  conventions?: string,
+): { system: string; user: string } {
+  const conventionsBlock = conventions
+    ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>`
+    : "";
+
+  const truncationNotice = truncated
+    ? "\n\n⚠️ NOTE: The diff was truncated. Generate a patch for the visible portion only."
+    : "";
+
+  return {
+    system: `You are a senior engineer. Given a code diff and a list of review issues, produce a unified diff patch that fixes the issues.
+
+Return ONLY a JSON object with this exact structure — no extra text, no markdown fences:
+{
+  "patch": "unified diff patch (optional — empty if no changes needed)",
+  "explanation": "brief explanation of what the patch does",
+  "files": ["path/to/file1.ts", "path/to/file2.ts"]
+}
+
+Rules:
+- Patch must be valid unified diff format
+- Only fix the issues listed; do not refactor unrelated code
+- Respect project conventions
+- If the issues cannot be fixed from the diff alone, set patch to "" and explain why`,
+
+    user: `Fix these issues for this change.\n\nDescription:\n${description}\n\nIssues:\n${issues.map((i) => `- ${i.severity} ${i.file || ""}${i.line ? `:${i.line}` : ""}: ${i.issue}\n  suggestion: ${i.suggestion}`).join("\n")}\n\n<diff>\n${diff}\n</diff>${conventionsBlock}${truncationNotice}`,
   };
 }
 
@@ -288,6 +323,16 @@ export function validateReviewResult(data: unknown): ReviewResult | null {
   };
 }
 
+export function validateFixResult(data: unknown): { patch: string; explanation: string; files: string[] } | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const r = data as Record<string, unknown>;
+  return {
+    patch: typeof r.patch === "string" ? r.patch : "",
+    explanation: typeof r.explanation === "string" ? r.explanation : "",
+    files: Array.isArray(r.files) ? r.files.map(String) : [],
+  };
+}
+
 export function validateSuggestResult(data: unknown): SuggestResult | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const r = data as Record<string, unknown>;
@@ -334,6 +379,8 @@ export function validateConventionsResult(data: unknown): Conventions | null {
     structure: r.structure,
     patterns: Array.isArray(r.patterns) ? r.patterns.map(String) : [],
     stack: r.stack,
+    entryPoints: Array.isArray(r.entryPoints) ? r.entryPoints.map(String) : [],
+    scripts: Array.isArray(r.scripts) ? r.scripts.map(String) : [],
     generatedAt: new Date().toISOString(),
   };
 }
