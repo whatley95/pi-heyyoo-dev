@@ -65,7 +65,7 @@ export interface HeyyooSessionState {
   reviewRounds: number;
 }
 
-export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan" | "fix";
+export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan";
 
 export interface YooToolParams {
   plan?: string;
@@ -74,7 +74,6 @@ export interface YooToolParams {
   recommend?: string;
   judge?: string;
   scan?: boolean;
-  fix?: boolean;
   files?: string[];
   exclude?: string[];
   revision?: string;
@@ -91,7 +90,6 @@ export interface YooToolResult {
   recommend?: RecommendResult;
   judge?: JudgeResult;
   scan?: ScanResult;
-  fix?: FixResult;
   error?: string;
   cost?: UsageCost;
 }
@@ -146,8 +144,3 @@ export interface ScanResult {
   files: string[];
 }
 
-export interface FixResult {
-  patch: string;
-  explanation: string;
-  files: string[];
-}
