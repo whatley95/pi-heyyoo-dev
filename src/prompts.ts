@@ -40,9 +40,14 @@ export function buildReviewPrompt(
   diff: string,
   truncated: boolean,
   acceptanceCriteria?: string[],
+  sessionContext?: string,
 ): { system: string; user: string } {
   const criteriaBlock = acceptanceCriteria?.length
     ? `\n\nAcceptance criteria for this step:\n${acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}`
+    : "";
+
+  const sessionBlock = sessionContext
+    ? `\n\n<session_context>\nRecent conversation relevant to this change:\n${sessionContext}\n</session_context>`
     : "";
 
   const truncationNotice = truncated
@@ -75,7 +80,7 @@ Rules:
 - If code follows a pattern you don't recognize, do NOT flag it as a convention issue
 - Be strict but fair — flag real problems, not preferences`,
 
-    user: `Review this code change. The developer says:\n\n${description}\n\n<diff>\n${diff}\n</diff>${criteriaBlock}${truncationNotice}`,
+    user: `Review this code change. The developer says:\n\n${description}\n\n<diff>\n${diff}\n</diff>${criteriaBlock}${sessionBlock}${truncationNotice}`,
   };
 }
 
