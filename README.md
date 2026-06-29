@@ -90,9 +90,14 @@ yoo.judge("auth refactor complete")
   → verdict: "pass" — all work complete ✓
 ```
 
-### Escalation
+### Loop detection
 
-If the same step fails review **3 times in a row**, yoo adds an escalation notice suggesting the main agent ask the user for guidance or try a fundamentally different approach. This prevents infinite fix-loop cycles.
+yoo watches for repetitive patterns and sends a steering message if:
+
+- `yoo.review` or `yoo.judge` is called 3+ times in a row without real code edits
+- The same `yoo` call is repeated with the same description
+
+This prevents the main agent from spinning in review-fix-review cycles.
 
 ## How it works
 
