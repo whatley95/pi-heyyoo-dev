@@ -1,4 +1,4 @@
-export interface HeyyoConfig {
+export interface HeyyooConfig {
   secondary: {
     provider: string;
     id: string;
@@ -50,7 +50,7 @@ export interface JudgeResult extends ReviewResult {
   summary: string;
 }
 
-export interface HeyyoSessionState {
+export interface HeyyooSessionState {
   plan?: PlanResult;
   completedSteps: number;
   totalSteps: number;
