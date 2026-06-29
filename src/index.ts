@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "@sinclair/typebox";
 import { loadHeyyooConfig } from "./config.js";
 import { callSecondaryModel } from "./secondary-model.js";
-import { getGitDiff } from "./diff-grabber.js";
+import { getDiff } from "./diff-grabber.js";
 import {
   buildPlanPrompt,
   buildReviewPrompt,
@@ -157,8 +157,13 @@ async function executeYooReview(
   cwd: string,
   description: string,
   ctx: ExtensionContext,
-  files?: string[],
-  exclude?: string[],
+  options: {
+    files?: string[];
+    exclude?: string[];
+    revision?: string;
+    since?: string;
+    vcs?: "git" | "svn";
+  } = {},
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
@@ -167,7 +172,7 @@ async function executeYooReview(
   }
 
   const state = getState(cwd);
-  const { diff, truncated, changedFiles } = getGitDiff(cwd, files, exclude);
+  const { diff, truncated, changedFiles, vcs } = getDiff(cwd, options);
   const sessionContext = getSessionContext(ctx);
 
   let conventionsText = "";
@@ -188,6 +193,7 @@ async function executeYooReview(
     description,
     diff,
     truncated,
+    vcs,
     state.plan?.acceptanceCriteria,
     sessionContext,
     conventionsText,
@@ -385,7 +391,7 @@ export default function (pi: ExtensionAPI) {
         description: "Provide a task description to get a structured todo plan with acceptance criteria.",
       })),
       review: Type.Optional(Type.String({
-        description: "Provide a description of what you just implemented. The secondary model examines git diff and returns a verdict with issues.",
+        description: "Provide a description of what you just implemented. The secondary model examines the diff and returns a verdict with issues.",
       })),
       suggest: Type.Optional(Type.String({
         description: "Ask a specific question to get alternative approaches from the secondary model.",
@@ -400,10 +406,19 @@ export default function (pi: ExtensionAPI) {
         description: "If true, scan project conventions and architecture patterns. Stores results for future reviews.",
       })),
       files: Type.Optional(Type.Array(Type.String(), {
-        description: "For review: limit git diff to these file paths.",
+        description: "For review: limit diff to these file paths.",
       })),
       exclude: Type.Optional(Type.Array(Type.String(), {
-        description: "For review: exclude these file paths from git diff.",
+        description: "For review: exclude these file paths from diff.",
+      })),
+      revision: Type.Optional(Type.String({
+        description: "For review: compare against this revision (e.g. 'HEAD~1', '1234', '1234:HEAD').",
+      })),
+      since: Type.Optional(Type.String({
+        description: "For review: include changes since this revision or commit ID.",
+      })),
+      vcs: Type.Optional(Type.Union([Type.Literal("git"), Type.Literal("svn")], {
+        description: "Version control system to use for diff. Auto-detected if omitted.",
       })),
     }),
     renderCall,
@@ -425,7 +440,13 @@ export default function (pi: ExtensionAPI) {
         if (p.plan) {
           result = await executeYooPlan(ctx.cwd, p.plan, signal);
         } else if (p.review) {
-          result = await executeYooReview(ctx.cwd, p.review, ctx, p.files, p.exclude, signal);
+          result = await executeYooReview(ctx.cwd, p.review, ctx, {
+            files: p.files,
+            exclude: p.exclude,
+            revision: p.revision,
+            since: p.since,
+            vcs: p.vcs,
+          }, signal);
         } else if (p.suggest) {
           result = await executeYooSuggest(ctx.cwd, p.suggest, signal);
         } else if (p.recommend) {

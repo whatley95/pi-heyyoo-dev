@@ -2,29 +2,105 @@ import { execFileSync } from "node:child_process";
 
 const MAX_DIFF_CHARS = 6000;
 
+export type VcsType = "git" | "svn";
+
 export interface DiffResult {
   diff: string;
   truncated: boolean;
   changedFiles: string[];
+  vcs?: VcsType;
 }
 
-export function getGitDiff(cwd: string, files?: string[], exclude?: string[]): DiffResult {
-  const pathArgs = buildPathArgs(files, exclude);
+export function getDiff(
+  cwd: string,
+  options: {
+    vcs?: VcsType;
+    revision?: string;
+    since?: string;
+    files?: string[];
+    exclude?: string[];
+  } = {},
+): DiffResult {
+  const vcs = options.vcs ?? detectVcs(cwd);
+  if (vcs === "svn") {
+    return getSvnDiff(cwd, options);
+  }
+  return getGitDiff(cwd, options);
+}
+
+export function getGitDiff(
+  cwd: string,
+  options: {
+    revision?: string;
+    since?: string;
+    files?: string[];
+    exclude?: string[];
+  } = {},
+): DiffResult {
+  const pathArgs = buildGitPathArgs(options.files, options.exclude);
 
   try {
-    const diff = runGitDiff(cwd, ["git", "diff", "HEAD", "--", ...pathArgs]);
-    if (diff.trim()) return processDiff(diff);
+    const args = buildGitRevisionArgs(options.revision, options.since, pathArgs);
+    const diff = runVcsDiff(cwd, ["git", ...args]);
+    if (diff.trim()) return processDiff(diff, "git");
   } catch { /* git diff failed or no repo */ }
 
   try {
-    const unstaged = runGitDiff(cwd, ["git", "diff", "--", ...pathArgs]);
-    if (unstaged.trim()) return processDiff(unstaged);
+    const diff = runVcsDiff(cwd, ["git", "diff", "--", ...pathArgs]);
+    if (diff.trim()) return processDiff(diff, "git");
   } catch { /* ignore */ }
 
-  return { diff: "(no changes detected — review session context instead)", truncated: false, changedFiles: [] };
+  return { diff: "(no changes detected — review session context instead)", truncated: false, changedFiles: [], vcs: "git" };
 }
 
-function buildPathArgs(files?: string[], exclude?: string[]): string[] {
+export function getSvnDiff(
+  cwd: string,
+  options: {
+    revision?: string;
+    since?: string;
+    files?: string[];
+    exclude?: string[];
+  } = {},
+): DiffResult {
+  const pathArgs = options.files && options.files.length > 0 ? options.files : ["."];
+
+  try {
+    const args = buildSvnRevisionArgs(options.revision, options.since);
+    if (options.exclude && options.exclude.length > 0) {
+      args.push("--diff-cmd", "internal");
+    }
+    args.push(...pathArgs);
+    const diff = runVcsDiff(cwd, ["svn", "diff", ...args]);
+    if (diff.trim()) {
+      const filtered = applyExclude(diff, options.exclude);
+      return processDiff(filtered, "svn");
+    }
+  } catch { /* svn diff failed or no repo */ }
+
+  return { diff: "(no SVN changes detected — review session context instead)", truncated: false, changedFiles: [], vcs: "svn" };
+}
+
+function buildGitRevisionArgs(revision?: string, since?: string, pathArgs: string[] = []): string[] {
+  if (revision) {
+    return ["diff", revision, "--", ...pathArgs];
+  }
+  if (since) {
+    return ["diff", `${since}..HEAD`, "--", ...pathArgs];
+  }
+  return ["diff", "HEAD", "--", ...pathArgs];
+}
+
+function buildSvnRevisionArgs(revision?: string, since?: string): string[] {
+  const args: string[] = [];
+  if (revision) {
+    args.push("-r", revision);
+  } else if (since) {
+    args.push("-r", `${since}:HEAD`);
+  }
+  return args;
+}
+
+function buildGitPathArgs(files?: string[], exclude?: string[]): string[] {
   const args: string[] = [];
   if (files && files.length > 0) {
     args.push(...files);
@@ -39,7 +115,15 @@ function buildPathArgs(files?: string[], exclude?: string[]): string[] {
   return args;
 }
 
-function runGitDiff(cwd: string, command: string[]): string {
+function applyExclude(diff: string, exclude?: string[]): string {
+  if (!exclude || exclude.length === 0) return diff;
+  const patterns = exclude.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`^(Index: |--- |\\+\\+\\+ )(${patterns.join("|")})`, "m");
+  const blocks = diff.split(/(?=^(?:Index: |--- )\s*)/m);
+  return blocks.filter((b) => !regex.test(b)).join("");
+}
+
+function runVcsDiff(cwd: string, command: string[]): string {
   const [file, ...args] = command;
   return execFileSync(file, args, {
     cwd,
@@ -49,24 +133,48 @@ function runGitDiff(cwd: string, command: string[]): string {
   });
 }
 
-function processDiff(diff: string): DiffResult {
-  const changedFiles = extractChangedFiles(diff);
+function processDiff(diff: string, vcs: VcsType): DiffResult {
+  const changedFiles = extractChangedFiles(diff, vcs);
   if (diff.length <= MAX_DIFF_CHARS) {
-    return { diff, truncated: false, changedFiles };
+    return { diff, truncated: false, changedFiles, vcs };
   }
   return {
     diff: diff.slice(0, MAX_DIFF_CHARS) + "\n... diff truncated (too large)",
     truncated: true,
     changedFiles,
+    vcs,
   };
 }
 
-function extractChangedFiles(diff: string): string[] {
+function extractChangedFiles(diff: string, vcs: VcsType): string[] {
   const files = new Set<string>();
+  if (vcs === "svn") {
+    const regex = /^Index:\s*(.+)$/gm;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(diff)) !== null) {
+      files.add(match[1].trim());
+    }
+    return [...files];
+  }
+
   const regex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(diff)) !== null) {
     files.add(match[2]);
   }
   return [...files];
+}
+
+function detectVcs(cwd: string): VcsType {
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd, encoding: "utf-8", timeout: 3000 });
+    return "git";
+  } catch { /* ignore */ }
+
+  try {
+    execFileSync("svn", ["info"], { cwd, encoding: "utf-8", timeout: 3000 });
+    return "svn";
+  } catch { /* ignore */ }
+
+  return "git";
 }

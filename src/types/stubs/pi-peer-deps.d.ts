@@ -60,5 +60,7 @@ declare module "@sinclair/typebox" {
     Integer(options?: Record<string, unknown>): unknown;
     Number(options?: Record<string, unknown>): unknown;
     Array(schema: unknown, options?: Record<string, unknown>): unknown;
+    Union(schemas: unknown[], options?: Record<string, unknown>): unknown;
+    Literal(value: string | number | boolean, options?: Record<string, unknown>): unknown;
   };
 }

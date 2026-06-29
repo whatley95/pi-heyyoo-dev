@@ -39,6 +39,7 @@ export function buildReviewPrompt(
   description: string,
   diff: string,
   truncated: boolean,
+  vcs?: string,
   acceptanceCriteria?: string[],
   sessionContext?: string,
   conventions?: string,
@@ -69,6 +70,8 @@ export function buildReviewPrompt(
     ? "\n\n⚠️ NOTE: The diff was truncated because it was too large. Review only what's visible."
     : "";
 
+  const vcsLine = vcs ? `\n\nVersion control: ${vcs}` : "";
+
   return {
     system: `You are a rigorous code reviewer. Your job is to catch bugs, mistakes, and quality issues that the developer missed.
 
@@ -97,7 +100,7 @@ Rules:
 - Do NOT flag issues you cannot see evidence for in the diff
 - Be strict but fair — flag real problems, not preferences`,
 
-    user: `Review this code change. The developer says:\n\n${description}\n\n<diff>\n${diff}\n</diff>${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}`,
+    user: `Review this code change. The developer says:\n\n${description}${vcsLine}\n\n<diff>\n${diff}\n</diff>${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}`,
   };
 }
 
