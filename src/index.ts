@@ -17,6 +17,7 @@ import {
   validateJudgeResult,
 } from "./prompts.js";
 import { renderCall, renderResult } from "./render.js";
+import { loadState, saveState } from "./plan-store.js";
 import type { YooToolParams, YooToolResult, HeyyoSessionState, PlanResult } from "./types.js";
 
 const sessionStates = new Map<string, HeyyoSessionState>();
@@ -24,7 +25,7 @@ const sessionStates = new Map<string, HeyyoSessionState>();
 function getState(cwd: string): HeyyoSessionState {
   let state = sessionStates.get(cwd);
   if (!state) {
-    state = { completedSteps: 0, totalSteps: 0 };
+    state = loadState(cwd) ?? { completedSteps: 0, totalSteps: 0 };
     sessionStates.set(cwd, state);
   }
   return state;
@@ -35,13 +36,59 @@ function setPlan(cwd: string, plan: PlanResult): void {
   state.plan = plan;
   state.totalSteps = plan.todo.length;
   state.completedSteps = 0;
+  saveState(cwd, state);
 }
 
 function markStepComplete(cwd: string): void {
   const state = getState(cwd);
   if (state.totalSteps > 0 && state.completedSteps < state.totalSteps) {
     state.completedSteps++;
+    saveState(cwd, state);
   }
+}
+
+const MAX_SESSION_CONTEXT_CHARS = 4000;
+
+function getSessionContext(ctx: ExtensionContext): string {
+  try {
+    const entries = ctx.sessionManager?.getEntries();
+    if (!Array.isArray(entries) || entries.length === 0) return "";
+
+    const recent = entries.slice(-10);
+    const lines: string[] = [];
+    let total = 0;
+
+    for (const entry of recent.reverse()) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as Record<string, unknown>;
+      const msg = (e.message ?? e) as Record<string, unknown> | undefined;
+      if (!msg || typeof msg.role !== "string") continue;
+      if (msg.role === "tool") continue;
+
+      const content = extractTextContent(msg);
+      if (!content) continue;
+
+      const line = `[${msg.role}] ${content}`;
+      if (total + line.length > MAX_SESSION_CONTEXT_CHARS) break;
+      lines.push(line);
+      total += line.length;
+    }
+
+    return lines.reverse().join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function extractTextContent(msg: Record<string, unknown>): string {
+  if (Array.isArray(msg.content)) {
+    return msg.content
+      .filter((c): c is Record<string, unknown> => c && typeof c === "object" && typeof (c as Record<string, unknown>).text === "string")
+      .map((c) => (c as Record<string, unknown>).text as string)
+      .join(" ");
+  }
+  if (typeof msg.content === "string") return msg.content;
+  return "";
 }
 
 async function executeYooPlan(
@@ -70,6 +117,7 @@ async function executeYooPlan(
 async function executeYooReview(
   cwd: string,
   description: string,
+  ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
   const config = loadHeyyoConfig(cwd);
@@ -79,7 +127,8 @@ async function executeYooReview(
 
   const state = getState(cwd);
   const { diff, truncated } = getGitDiff(cwd);
-  const { system, user } = buildReviewPrompt(description, diff, truncated, state.plan?.acceptanceCriteria);
+  const sessionContext = getSessionContext(ctx);
+  const { system, user } = buildReviewPrompt(description, diff, truncated, state.plan?.acceptanceCriteria, sessionContext);
   const raw = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
   const parsed = parseJsonResponse(raw);
   const review = validateReviewResult(parsed);
@@ -168,7 +217,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     cwd = ctx.cwd;
-    sessionStates.delete(cwd);
+    const diskState = loadState(cwd);
+    if (diskState) {
+      sessionStates.set(cwd, diskState);
+    }
   });
 
   pi.on("session_shutdown", async (_event, _ctx) => {
@@ -227,7 +279,7 @@ export default function (pi: ExtensionAPI) {
         if (p.plan) {
           result = await executeYooPlan(ctx.cwd, p.plan, signal);
         } else if (p.review) {
-          result = await executeYooReview(ctx.cwd, p.review, signal);
+          result = await executeYooReview(ctx.cwd, p.review, ctx, signal);
         } else if (p.suggest) {
           result = await executeYooSuggest(ctx.cwd, p.suggest, signal);
         } else if (p.recommend) {
