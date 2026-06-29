@@ -1,4 +1,4 @@
-# pi-heyyo
+# pi-heyyoo
 
 Pair-programmer extension for [Pi](https://github.com/earendil-works/pi). A secondary model reviews, plans, suggests, recommends, and judges your work — catching bugs, missing error handling, and blind spots.
 
@@ -11,7 +11,7 @@ pi install git:github.com/whatley95/pi-heyyoo-dev
 Or from local path:
 
 ```bash
-pi install ./pi-heyyo
+pi install ./pi-heyyoo
 ```
 
 Try without installing:
@@ -26,7 +26,7 @@ Add to `~/.pi/agent/settings.json`:
 
 ```json
 {
-  "pi-heyyo": {
+  "pi-heyyoo": {
     "secondary": {
       "provider": "opencode-go",
       "id": "deepseek-v4-pro",

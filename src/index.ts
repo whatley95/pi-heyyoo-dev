@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { loadHeyyoConfig } from "./config.js";
+import { loadHeyyooConfig } from "./config.js";
 import { callSecondaryModel } from "./secondary-model.js";
 import { getGitDiff } from "./diff-grabber.js";
 import {
@@ -18,11 +18,11 @@ import {
 } from "./prompts.js";
 import { renderCall, renderResult } from "./render.js";
 import { loadState, saveState } from "./plan-store.js";
-import type { YooToolParams, YooToolResult, HeyyoSessionState, PlanResult } from "./types.js";
+import type { YooToolParams, YooToolResult, HeyyooSessionState, PlanResult } from "./types.js";
 
-const sessionStates = new Map<string, HeyyoSessionState>();
+const sessionStates = new Map<string, HeyyooSessionState>();
 
-function getState(cwd: string): HeyyoSessionState {
+function getState(cwd: string): HeyyooSessionState {
   let state = sessionStates.get(cwd);
   if (!state) {
     state = loadState(cwd) ?? { completedSteps: 0, totalSteps: 0 };
@@ -96,9 +96,9 @@ async function executeYooPlan(
   task: string,
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
-  const config = loadHeyyoConfig(cwd);
+  const config = loadHeyyooConfig(cwd);
   if (!config.secondary.id) {
-    return { action: "plan", error: "No secondary model configured. Set pi-heyyo.secondary in settings.json." };
+    return { action: "plan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
   const { system, user } = buildPlanPrompt(task);
@@ -120,9 +120,9 @@ async function executeYooReview(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
-  const config = loadHeyyoConfig(cwd);
+  const config = loadHeyyooConfig(cwd);
   if (!config.secondary.id) {
-    return { action: "review", error: "No secondary model configured. Set pi-heyyo.secondary in settings.json." };
+    return { action: "review", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
   const state = getState(cwd);
@@ -149,9 +149,9 @@ async function executeYooSuggest(
   question: string,
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
-  const config = loadHeyyoConfig(cwd);
+  const config = loadHeyyooConfig(cwd);
   if (!config.secondary.id) {
-    return { action: "suggest", error: "No secondary model configured. Set pi-heyyo.secondary in settings.json." };
+    return { action: "suggest", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
   const { system, user } = buildSuggestPrompt(question);
@@ -171,9 +171,9 @@ async function executeYooRecommend(
   situation: string,
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
-  const config = loadHeyyoConfig(cwd);
+  const config = loadHeyyooConfig(cwd);
   if (!config.secondary.id) {
-    return { action: "recommend", error: "No secondary model configured. Set pi-heyyo.secondary in settings.json." };
+    return { action: "recommend", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
   const state = getState(cwd);
@@ -194,9 +194,9 @@ async function executeYooJudge(
   description: string,
   signal?: AbortSignal,
 ): Promise<YooToolResult> {
-  const config = loadHeyyoConfig(cwd);
+  const config = loadHeyyooConfig(cwd);
   if (!config.secondary.id) {
-    return { action: "judge", error: "No secondary model configured. Set pi-heyyo.secondary in settings.json." };
+    return { action: "judge", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
   const state = getState(cwd);
@@ -239,7 +239,7 @@ export default function (pi: ExtensionAPI) {
       "Use yoo with suggest:true when you need alternative approaches for a specific technical question.",
       "Use yoo with recommend:true when you're unsure what step to take next.",
       "Use yoo with judge:true after completing all work for a final holistic review against the original plan.",
-      "The secondary model should be a DIFFERENT model family than the main model to catch blind spots. Configure in settings.json under pi-heyyo.secondary.",
+      "The secondary model should be a DIFFERENT model family than the main model to catch blind spots. Configure in settings.json under pi-heyyoo.secondary.",
       "After yoo.review returns 'needs-work', fix the issues and call yoo.review again until it returns 'pass'.",
       "Only one action (plan/review/suggest/recommend/judge) per call. Do not combine them.",
     ],
@@ -306,7 +306,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("yoo", {
     description: "Show yoo pair-programmer configuration and status",
     handler: async (_args, ctx) => {
-      const config = loadHeyyoConfig(ctx.cwd);
+      const config = loadHeyyooConfig(ctx.cwd);
       const state = getState(ctx.cwd);
 
       const lines = [
@@ -315,7 +315,7 @@ export default function (pi: ExtensionAPI) {
         "Secondary model:",
         config.secondary.provider && config.secondary.id
           ? `  ${config.secondary.provider}:${config.secondary.id}` + (config.secondary.thinking ? ` • ${config.secondary.thinking}` : "")
-          : "  not configured — set pi-heyyo.secondary in settings.json",
+          : "  not configured — set pi-heyyoo.secondary in settings.json",
         "",
         "Session plan:",
         state.plan
@@ -335,7 +335,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("yoo-config", {
     description: "Configure secondary model for yoo pair-programmer",
     handler: async (args, ctx) => {
-      ctx.ui.notify("Edit ~/.pi/agent/settings.json and set pi-heyyo.secondary.provider and pi-heyyo.secondary.id", "info");
+      ctx.ui.notify("Edit ~/.pi/agent/settings.json and set pi-heyyoo.secondary.provider and pi-heyyoo.secondary.id", "info");
       if (args.trim()) {
         ctx.ui.notify(`Suggested: ${args.trim()}`, "info");
       }

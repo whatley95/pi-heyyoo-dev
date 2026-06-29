@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { HeyyoConfig } from "./types.js";
+import type { HeyyooConfig } from "./types.js";
 
 let getAgentDirImpl: () => string;
 try {
@@ -15,20 +15,20 @@ export function getAgentDir(): string {
   return getAgentDirImpl();
 }
 
-export function loadHeyyoConfig(cwd: string): HeyyoConfig {
+export function loadHeyyooConfig(cwd: string): HeyyooConfig {
   const agentDir = getAgentDir();
   const globalPath = join(agentDir, "settings.json");
   const projectPath = join(cwd, ".pi", "settings.json");
 
-  let config: HeyyoConfig = {
+  let config: HeyyooConfig = {
     secondary: { provider: "", id: "", thinking: "xhigh" },
   };
 
   if (existsSync(globalPath)) {
     try {
       const global = JSON.parse(readFileSync(globalPath, "utf-8"));
-      if (global["pi-heyyo"]) {
-        config = mergeConfig(config, global["pi-heyyo"]);
+      if (global["pi-heyyoo"]) {
+        config = mergeConfig(config, global["pi-heyyoo"]);
       }
     } catch { /* ignore parse errors */ }
   }
@@ -36,8 +36,8 @@ export function loadHeyyoConfig(cwd: string): HeyyoConfig {
   if (existsSync(projectPath)) {
     try {
       const project = JSON.parse(readFileSync(projectPath, "utf-8"));
-      if (project["pi-heyyo"]) {
-        config = mergeConfig(config, project["pi-heyyo"]);
+      if (project["pi-heyyoo"]) {
+        config = mergeConfig(config, project["pi-heyyoo"]);
       }
     } catch { /* ignore parse errors */ }
   }
@@ -45,7 +45,7 @@ export function loadHeyyoConfig(cwd: string): HeyyoConfig {
   return config;
 }
 
-function mergeConfig(base: HeyyoConfig, override: Partial<HeyyoConfig>): HeyyoConfig {
+function mergeConfig(base: HeyyooConfig, override: Partial<HeyyooConfig>): HeyyooConfig {
   return {
     secondary: {
       provider: override.secondary?.provider || base.secondary.provider,
