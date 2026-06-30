@@ -156,8 +156,10 @@ async function callOpenAiCompatibleApi(
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = buildOpenAiUrl(apiInfo, apiKey);
 
-  const thinkingEnabled = Boolean(thinking && supportsThinkingParam(provider, model));
-  // When thinking/reasoning is enabled, the output limit must be larger than the thinking budget.
+  const supportsReasoning = supportsReasoningEffort(provider, model);
+  const supportsAnthropicThinking = supportsThinkingParam(provider, model);
+  const thinkingEnabled = Boolean(thinking && (supportsReasoning || supportsAnthropicThinking));
+  // When thinking/reasoning is enabled, reserve room for both internal reasoning and visible output.
   const outputTokenLimit = thinkingEnabled ? 8192 : 2048;
 
   const body: Record<string, unknown> = {
@@ -170,8 +172,12 @@ async function callOpenAiCompatibleApi(
     max_tokens: outputTokenLimit,
   };
   if (thinkingEnabled) {
-    body.thinking = { type: "enabled", budget_tokens: thinkingBudget(thinking ?? "medium") };
     delete body.temperature;
+    if (supportsReasoning) {
+      body.reasoning_effort = reasoningEffortFromThinking(thinking ?? "medium");
+    } else {
+      body.thinking = { type: "enabled", budget_tokens: thinkingBudget(thinking ?? "medium") };
+    }
   }
   if (supportsMaxCompletionTokens(provider, model)) {
     delete body.max_tokens;
@@ -353,14 +359,34 @@ async function callAnthropicApi(
 }
 
 function supportsThinkingParam(provider: string, model: string): boolean {
-  // DeepSeek models support the thinking parameter via reasoning_effort or thinking.type
+  // Anthropic-style thinking parameter. Used only when reasoning_effort is not supported.
   const lc = `${provider}:${model}`.toLowerCase();
-  if (lc.startsWith("deepseek:")) return true;
-  if (lc.startsWith("opencode-")) return true;
   if (lc.startsWith("openrouter:")) return true;
-  // Anthropic supports thinking via separate function signature, handled in callAnthropicApi
-  if (provider === "anthropic") return true;
   return false;
+}
+
+function supportsReasoningEffort(provider: string, model: string): boolean {
+  // OpenAI-style reasoning_effort is supported by OpenAI o-series/gpt-5 and DeepSeek reasoning models.
+  const lc = `${provider}:${model}`.toLowerCase();
+  const modelLc = model.toLowerCase();
+  if (modelLc.startsWith("deepseek")) return true;
+  if (modelLc.startsWith("o") && /^o\d/.test(modelLc)) return true;
+  if (modelLc.startsWith("gpt-5")) return true;
+  if (lc.startsWith("openrouter:deepseek")) return true;
+  return false;
+}
+
+function reasoningEffortFromThinking(level: string): "low" | "medium" | "high" {
+  switch (level?.toLowerCase()) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "high":
+    case "xhigh":
+      return "high";
+    default:
+      return "medium";
+  }
 }
 
 function thinkingBudget(level: string): number {
