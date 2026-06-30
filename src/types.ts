@@ -92,6 +92,8 @@ export interface YooToolResult {
   scan?: ScanResult;
   error?: string;
   cost?: UsageCost;
+  inProgress?: boolean;
+  progressMessage?: string;
 }
 
 export interface UsageCost {
