@@ -254,25 +254,64 @@ Rules:
 }
 
 export function parseJsonResponse<T>(text: string): T | null {
-  let cleaned = text.trim();
+  const cleaned = text.trim();
 
-  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenceMatch) {
-    cleaned = fenceMatch[1].trim();
-  }
-
+  // Try the whole text first.
   try {
     return JSON.parse(cleaned) as T;
   } catch { /* continue */ }
 
-  const objMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (objMatch) {
+  // Try each markdown code fence.
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/g;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = fenceRegex.exec(cleaned)) !== null) {
     try {
-      return JSON.parse(objMatch[0]) as T;
+      return JSON.parse(fenceMatch[1].trim()) as T;
+    } catch { /* continue */ }
+  }
+
+  // Try inline backtick fences.
+  const inlineRegex = /`([\s\S]*?)`/g;
+  let inlineMatch: RegExpExecArray | null;
+  while ((inlineMatch = inlineRegex.exec(cleaned)) !== null) {
+    try {
+      return JSON.parse(inlineMatch[1].trim()) as T;
+    } catch { /* continue */ }
+  }
+
+  // Find the largest balanced JSON object in the text.
+  const json = extractLargestJsonObject(cleaned);
+  if (json) {
+    try {
+      return JSON.parse(json) as T;
     } catch { /* continue */ }
   }
 
   return null;
+}
+
+function extractLargestJsonObject(text: string): string | null {
+  let best: string | null = null;
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start !== -1) {
+          const candidate = text.slice(start, i + 1);
+          if (!best || candidate.length > best.length) {
+            best = candidate;
+          }
+        }
+      }
+    }
+  }
+  return best;
 }
 
 export function validatePlanResult(data: unknown): PlanResult | null {

@@ -1,4 +1,5 @@
 import { resolveApiKey } from "./auth-reader.js";
+import { logEvent } from "./logger.js";
 import type { ProviderApiInfo, UsageCost } from "./types.js";
 
 const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
@@ -94,6 +95,7 @@ export async function callSecondaryModel(
   userPrompt: string,
   signal?: AbortSignal,
   thinking?: string,
+  cwd?: string,
 ): Promise<{ content: string; usage: UsageCost }> {
   const apiInfo = getProviderApiInfo(provider);
   if (!apiInfo) {
@@ -105,11 +107,22 @@ export async function callSecondaryModel(
     throw new Error(`No API key found for provider "${provider}". Set the appropriate environment variable or configure auth.json.`);
   }
 
-  if (apiInfo.style === "anthropic") {
-    return callAnthropicApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, thinking);
+  try {
+    if (apiInfo.style === "anthropic") {
+      return await callAnthropicApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, thinking);
+    }
+    return await callOpenAiCompatibleApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, thinking);
+  } catch (err) {
+    if (cwd) {
+      logEvent(cwd, "error", err instanceof Error ? err.message : String(err), {
+        provider,
+        model,
+        thinking,
+        promptTokensEstimate: Math.ceil((systemPrompt.length + userPrompt.length) / 4),
+      });
+    }
+    throw err;
   }
-
-  return callOpenAiCompatibleApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, thinking);
 }
 
 function estimateCost(provider: string, model: string, inputTokens: number, outputTokens: number): number {
