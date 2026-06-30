@@ -41,16 +41,17 @@ export function checkLoop(state: LoopDetectionState): { looping: boolean; messag
   const calls = state.recentCalls;
   if (calls.length < 4) return null;
 
-  // Pattern 1: yoo.review called 3+ times in a row without other tools
+  // Pattern 1: yoo.* called 3+ times in a row without other tools doing real work
   const recentYoo = calls.slice(-5);
-  const yooReviewCalls = recentYoo.filter((c) => c.toolName === "yoo" && (c.args.review || c.args.judge));
+  const yooCalls = recentYoo.filter((c) => c.toolName === "yoo");
   const nonYooCalls = recentYoo.filter((c) => c.toolName !== "yoo");
+  const realWorkCalls = nonYooCalls.filter((c) => !isReadOnlyTool(c.toolName));
 
-  if (yooReviewCalls.length >= 3 && nonYooCalls.length === 0) {
+  if (yooCalls.length >= 3 && realWorkCalls.length === 0) {
     return {
       looping: true,
       message:
-        "LOOP DETECTED: you keep calling yoo.review/yoo.judge without making real edits. STOP. Pick one concrete issue, fix it in the actual code, then call yoo.review once. If stuck, ask the user or use yoo.suggest.",
+        "LOOP DETECTED: you keep calling yoo tools without making real edits. STOP. Pick one concrete issue, fix it in the actual code, then call yoo.review once. If stuck, ask the user or use yoo.suggest.",
     };
   }
 
@@ -97,6 +98,10 @@ export function getYooActionKey(args: Record<string, unknown>): string {
   if (typeof args.recommend === "string") return "recommend";
   if (args.scan === true) return "scan";
   return "";
+}
+
+function isReadOnlyTool(toolName: string): boolean {
+  return toolName === "readFile" || toolName === "grep" || toolName === "glob";
 }
 
 function getYooDescription(args: Record<string, unknown>): string {

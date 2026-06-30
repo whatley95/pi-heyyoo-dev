@@ -40,7 +40,6 @@ export interface ReviewResult {
   nextStep?: string;
   escalated?: boolean;
   autoJudged?: boolean;
-  preReviewOutput?: string;
   truncated?: boolean;
   droppedFiles?: string[];
 }
@@ -71,6 +70,7 @@ export interface HeyyooSessionState {
   completedSteps: number;
   totalSteps: number;
   reviewRounds: number;
+  reviewedSteps: boolean[];
 }
 
 export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan";

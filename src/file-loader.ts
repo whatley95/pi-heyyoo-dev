@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { estimateTokens } from "./token-budget.js";
 import type { ReviewBudget } from "./token-budget.js";
 import { resolveProjectPath } from "./path-security.js";
@@ -6,7 +6,7 @@ import { resolveProjectPath } from "./path-security.js";
 export interface FileContentEntry {
   file: string;
   content: string;
-  mode: "full" | "diff-only" | "outline";
+  mode: "full" | "outline";
   lineCount: number;
   tokenEstimate: number;
 }
@@ -37,7 +37,7 @@ export function loadFileContentsForReview(options: LoadFileContentsOptions): {
 } {
   const { cwd, changedFiles, budget, strategy, fullFileThresholdLines } = options;
   const reviewable = changedFiles.filter(isReviewableFile);
-  const dropped: string[] = changedFiles.filter((f) => !reviewableFilesSet(reviewable, f));
+  const dropped: string[] = changedFiles.filter((f) => !reviewable.includes(f));
 
   if (strategy === "diff-only") {
     return { entries: [], dropped, totalTokens: 0 };
@@ -121,13 +121,13 @@ export function loadFileContentsForReview(options: LoadFileContentsOptions): {
   return { entries, dropped, totalTokens };
 }
 
-function reviewableFilesSet(reviewable: string[], file: string): boolean {
-  return reviewable.includes(file);
-}
+const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
 function readTextFile(path: string): string | null {
   if (!existsSync(path)) return null;
   try {
+    const stats = statSync(path);
+    if (stats.size > MAX_FILE_SIZE_BYTES) return null;
     return readFileSync(path, "utf-8");
   } catch {
     return null;
@@ -145,7 +145,7 @@ function generateOutline(content: string): string {
       /^(import|export|class|interface|type|function|const|let|var|async function|public|private|protected|static|#)/.test(
         trimmed,
       ) ||
-      /^\/(\/|\*|\*)/.test(trimmed)
+      /^\/(\/|\*)/.test(trimmed)
     ) {
       outline.push(line);
     }

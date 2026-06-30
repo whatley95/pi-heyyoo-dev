@@ -16,14 +16,14 @@ This file is written for AI coding agents. It assumes no prior knowledge of the 
 
 ### What the extension exposes
 
-| Surface | Purpose |
-|---------|---------|
-| Tool `yoo` | Main API used by the primary agent: `plan`, `review`, `suggest`, `recommend`, `judge`, `scan`. |
-| Command `/yoo` | Run actions or show status from the terminal. |
-| Commands `/yoo-status`, `/yoo-info` | Detailed diagnostics. |
-| Command `/yoo-model` | Interactively pick the secondary model and write it to `~/.pi/agent/settings.json`. |
-| Command `/yoo-config` | Guidance for configuring the secondary model. |
-| Command `/yoo-clear` | Clear plan, session state, cost tracking, memory, and conventions. |
+| Surface                             | Purpose                                                                                        |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Tool `yoo`                          | Main API used by the primary agent: `plan`, `review`, `suggest`, `recommend`, `judge`, `scan`. |
+| Command `/yoo`                      | Run actions or show status from the terminal.                                                  |
+| Commands `/yoo-status`, `/yoo-info` | Detailed diagnostics.                                                                          |
+| Command `/yoo-model`                | Interactively pick the secondary model and write it to `~/.pi/agent/settings.json`.            |
+| Command `/yoo-config`               | Guidance for configuring the secondary model.                                                  |
+| Command `/yoo-clear`                | Clear plan, session state, cost tracking, memory, and conventions.                             |
 
 ---
 
@@ -38,7 +38,7 @@ This file is written for AI coding agents. It assumes no prior knowledge of the 
 - **Linting:** ESLint 10 with `@eslint/js` and `typescript-eslint` recommended configs.
 - **Package manager:** npm (lockfile `package-lock.json`).
 
-There is **no bundler, no test framework, and no compile step**. Source files are executed directly by Pi.
+There is **no bundler and no compile step**. Source files are executed directly by Pi. Tests use the Node.js built-in test runner.
 
 ---
 
@@ -67,6 +67,12 @@ pi-heyyoo/
     ├── loop-detector.ts  # Detect review-fix loops and emit steer messages
     ├── pre-review.ts     # Run configured pre-review shell commands
     ├── render.ts         # TUI call/result rendering for Pi
+    ├── progress.ts       # Status/progress reporting helpers
+    ├── file-loader.ts    # Load changed file contents within token budget
+    ├── token-budget.ts   # Calculate review token budgets from model info
+    ├── model-registry.ts # Known secondary model context windows and output limits
+    ├── pi-paths.ts       # Resolve Pi agent and project config paths
+    ├── logger.ts         # Per-project event/error log
     └── types/stubs/      # Ambient declarations for peer dependencies
         ├── pi-peer-deps.d.ts
         └── pi-tui.d.ts
@@ -89,17 +95,20 @@ pi-heyyoo/
 
 All commands run from the repository root.
 
-| Command | What it does |
-|---------|--------------|
-| `npm install` | Install dev dependencies and resolve peer deps. |
-| `npm run typecheck` | Run `tsc --noEmit` against `src/`. |
-| `npm run lint` | Run ESLint against `src/`. |
-| `npm run bump` | Bump patch version in `package.json`. |
-| `npm run bump:patch` | Same as `npm run bump`. |
-| `npm run bump:minor` | Bump minor version. |
-| `npm run bump:major` | Bump major version. |
+| Command                | What it does                                         |
+| ---------------------- | ---------------------------------------------------- |
+| `npm install`          | Install dev dependencies and resolve peer deps.      |
+| `npm run typecheck`    | Run `tsc --noEmit` against `src/`.                   |
+| `npm run lint`         | Run ESLint against `src/`.                           |
+| `npm test`             | Run the Node test runner against `src/**/*.test.ts`. |
+| `npm run format`       | Run Prettier to format `src/`.                       |
+| `npm run format:check` | Check Prettier formatting without writing.           |
+| `npm run bump`         | Bump patch version in `package.json`.                |
+| `npm run bump:patch`   | Same as `npm run bump`.                              |
+| `npm run bump:minor`   | Bump minor version.                                  |
+| `npm run bump:major`   | Bump major version.                                  |
 
-There is **no `build`, `test`, `start`, or `dev` script**. Pi loads `src/index.ts` directly, and TypeScript is checked but not emitted (`tsconfig.json` has `"noEmit": true`).
+There is **no `build`, `start`, or `dev` script**. Pi loads `src/index.ts` directly, and TypeScript is checked but not emitted (`tsconfig.json` has `"noEmit": true`).
 
 ### Pre-review commands recommended in README
 
@@ -108,15 +117,12 @@ The README example configures:
 ```json
 {
   "pi-heyyoo": {
-    "preReviewCommands": [
-      "npm run typecheck",
-      "npm run lint"
-    ]
+    "preReviewCommands": ["npm run typecheck", "npm run lint"]
   }
 }
 ```
 
-If you add tests, wire them here and in `package.json` scripts; update `src/conventions.ts` and this file so the scan detects them.
+Tests live in `src/**/*.test.ts` and use the Node built-in test runner with `tsx`. If you add new test files, they are picked up automatically by `npm test`; also update `src/conventions.ts` inference if the project structure changes.
 
 ---
 
@@ -149,15 +155,15 @@ npm run lint
 
 ## Testing instructions
 
-This project currently **does not have an automated test suite** (no `test` script, no test framework dependency, no test files).
-
-Validation is manual / integration-based:
+The project uses the Node.js built-in test runner with `tsx` for TypeScript loading.
 
 1. `npm run typecheck` must pass.
 2. `npm run lint` must pass.
-3. If you change behavior, exercise it through the Pi extension (`/yoo` commands or the `yoo` tool) or by invoking the module with `tsx`.
+3. `npm test` must pass.
+4. `npm run format:check` must pass.
+5. For behavior changes, also exercise the Pi extension (`/yoo` commands or the `yoo` tool) or invoke the module with `tsx`.
 
-When adding tests, choose a framework consistent with the project conventions at that time and update this section.
+Test files are co-located with the source modules they cover (`src/**/*.test.ts`). When adding new functionality, add or extend the relevant test file.
 
 ---
 
@@ -186,8 +192,8 @@ Relevant keys:
 - `secondary.provider` / `secondary.id` — required; determines which model answers.
 - `secondary.thinking` — optional reasoning budget (`off` → `xhigh`).
 - `autoJudge` — run `judge` automatically when the last plan step passes review.
-- `preReviewCommands` — shell commands run before each review; output is included in the prompt.
-- `costBudgetUsd` — hard cap on session spend.
+- `preReviewCommands` — shell commands run before each review; output is included in the prompt. Interpreter commands (`node`, `npx`, `python`, `python3`, `ruby`) are restricted to relative script files; inline-evaluation flags (`-c`, `-e`, `--eval`, etc.) are rejected.
+- `costBudgetUsd` — hard cap on estimated spend for the current Pi session. Negative values are treated as unset; `0` means no spend is allowed. `cost.json` is reset at the start of each Pi session and can also be cleared with `/yoo-clear`.
 
 ### Authentication
 
@@ -201,9 +207,9 @@ API keys are resolved by `src/auth-reader.ts` in order:
 
 The extension stores per-project runtime data under `.pi/heyyoo/`:
 
-- `plan.json` — active plan, completed steps, review-round counter.
+- `plan.json` — active plan, completed steps, review-round counter, and which completed steps were reviewed vs. manually marked done.
 - `conventions.json` — cached project conventions.
-- `cost.json` — estimated session spend.
+- `cost.json` — estimated spend for the current Pi session.
 - `memory.json` — recent issues per file.
 
 `.pi/` is gitignored. Do not commit it.

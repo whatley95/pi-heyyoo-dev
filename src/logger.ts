@@ -21,7 +21,7 @@ function rotateIfNeeded(path: string): void {
       const content = readFileSync(path, "utf-8");
       const lines = content.split("\n");
       const trimmed = lines.slice(-MAX_LOG_LINES).join("\n");
-      writeFileSync(path, trimmed, "utf-8");
+      writeFileSync(path, trimmed, { encoding: "utf-8", mode: 0o600 });
     }
   } catch {
     /* ignore rotation errors */
@@ -38,7 +38,7 @@ export function logEvent(cwd: string, level: LogLevel, message: string, details?
     const timestamp = new Date().toISOString();
     const detailsText = details && Object.keys(details).length > 0 ? ` | ${JSON.stringify(details)}` : "";
     const entry = `[${timestamp}] [${level.toUpperCase()}] ${message}${detailsText}\n`;
-    appendFileSync(path, entry, "utf-8");
+    appendFileSync(path, entry, { encoding: "utf-8", mode: 0o600 });
   } catch {
     /* logging should never crash the tool */
   }

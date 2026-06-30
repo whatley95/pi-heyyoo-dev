@@ -109,35 +109,62 @@ export function getGitDiff(
 ): DiffResult {
   const revision = validateRevision(options.revision);
   const since = validateRevision(options.since);
-  const pathArgs = buildGitPathArgs(options.files, options.exclude);
+  let pathArgs: string[] | undefined;
+  try {
+    pathArgs = buildGitPathArgs(options.files, options.exclude);
+  } catch (err) {
+    logEvent(cwd, "warn", "Unsafe git diff paths", { error: err instanceof Error ? err.message : String(err) });
+    return {
+      diff: "(could not retrieve diff — unsafe file or exclude paths)",
+      truncated: false,
+      changedFiles: [],
+      vcs: "git",
+    };
+  }
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
 
-  try {
-    const args = buildGitRevisionArgs(revision, since, pathArgs);
-    const diff = runVcsDiff(cwd, ["git", ...args]);
-    if (diff.trim()) return processDiff(diff, "git", maxDiffChars);
-  } catch (err) {
-    logEvent(cwd, "debug", "Git diff attempt failed", {
-      error: err instanceof Error ? err.message : String(err),
-      args: buildGitRevisionArgs(revision, since, pathArgs),
-    });
+  if (revision || since) {
+    try {
+      const args = buildGitRevisionArgs(revision, since, pathArgs);
+      const diff = runVcsDiff(cwd, ["git", ...args]);
+      return processDiff(diff, "git", maxDiffChars);
+    } catch (err) {
+      logEvent(cwd, "debug", "Git diff attempt failed", {
+        error: err instanceof Error ? err.message : String(err),
+        args: buildGitRevisionArgs(revision, since, pathArgs),
+      });
+      return {
+        diff: "(could not retrieve diff for the requested revision range)",
+        truncated: false,
+        changedFiles: [],
+        vcs: "git",
+      };
+    }
   }
 
+  let combinedDiff = "";
   try {
-    const diff = runVcsDiff(cwd, ["git", "diff", "--", ...pathArgs]);
-    if (diff.trim()) return processDiff(diff, "git", maxDiffChars);
+    const diff = pathArgs ? runVcsDiff(cwd, ["git", "diff", "--", ...pathArgs]) : runVcsDiff(cwd, ["git", "diff"]);
+    if (diff.trim()) combinedDiff += diff;
   } catch (err) {
     logEvent(cwd, "debug", "Git working-tree diff failed", { error: err instanceof Error ? err.message : String(err) });
   }
 
   if (options.untracked) {
     try {
-      const untracked = runGitUntrackedDiff(cwd, pathArgs);
-      if (untracked.trim()) return processDiff(untracked, "git", maxDiffChars);
+      const untrackedFiles = listGitUntrackedFiles(cwd, options.files, options.exclude);
+      if (untrackedFiles.length > 0) {
+        const untracked = runGitUntrackedDiff(cwd, untrackedFiles);
+        if (untracked.trim()) {
+          combinedDiff += (combinedDiff ? "\n" : "") + untracked;
+        }
+      }
     } catch (err) {
       logEvent(cwd, "debug", "Git untracked diff failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }
+
+  if (combinedDiff.trim()) return processDiff(combinedDiff, "git", maxDiffChars);
 
   return {
     diff: "(no changes detected — review session context instead)",
@@ -166,13 +193,10 @@ export function getSvnDiff(
   try {
     const args = buildSvnRevisionArgs(revision, since);
     const safeExcludes = options.exclude?.filter((e) => isSafeRelativePath(e)) ?? [];
-    if (safeExcludes.length > 0) {
-      args.push("--diff-cmd", "internal");
-    }
     args.push(...pathArgs);
     const diff = runVcsDiff(cwd, ["svn", "diff", ...args]);
     if (diff.trim()) {
-      const filtered = applyExclude(diff, safeExcludes);
+      const filtered = safeExcludes.length > 0 ? applyExclude(diff, safeExcludes) : diff;
       return processDiff(filtered, "svn", maxDiffChars);
     }
   } catch (err) {
@@ -187,14 +211,19 @@ export function getSvnDiff(
   };
 }
 
-function buildGitRevisionArgs(revision?: string, since?: string, pathArgs: string[] = []): string[] {
+function buildGitRevisionArgs(revision?: string, since?: string, pathArgs?: string[]): string[] {
+  const args: string[] = [];
   if (revision) {
-    return ["diff", revision, "--", ...pathArgs];
+    args.push("diff", revision);
+  } else if (since) {
+    args.push("diff", `${since}..HEAD`);
+  } else {
+    args.push("diff", "HEAD");
   }
-  if (since) {
-    return ["diff", `${since}..HEAD`, "--", ...pathArgs];
+  if (pathArgs) {
+    args.push("--", ...pathArgs);
   }
-  return ["diff", "HEAD", "--", ...pathArgs];
+  return args;
 }
 
 function buildSvnRevisionArgs(revision?: string, since?: string): string[] {
@@ -207,18 +236,19 @@ function buildSvnRevisionArgs(revision?: string, since?: string): string[] {
   return args;
 }
 
-function buildGitPathArgs(files?: string[], exclude?: string[]): string[] {
-  const args: string[] = [];
-  if (files && files.length > 0) {
-    for (const f of files) {
-      if (isSafeRelativePath(f)) {
-        args.push(f);
-      }
+function buildGitPathArgs(files?: string[], exclude?: string[]): string[] | undefined {
+  if (!files || files.length === 0) {
+    if (exclude && exclude.length > 0) {
+      return [".", ...exclude.filter((e) => isSafeRelativePath(e)).map((e) => `:(exclude)${e}`)];
     }
+    return undefined;
   }
-  if (args.length === 0) {
-    args.push(".");
+
+  const safeFiles = files.filter((f) => isSafeRelativePath(f));
+  if (safeFiles.length === 0) {
+    throw new Error("No safe file paths provided for git diff");
   }
+  const args = [...safeFiles];
   if (exclude && exclude.length > 0) {
     for (const e of exclude) {
       if (isSafeRelativePath(e)) {
@@ -249,24 +279,61 @@ function runVcsDiff(cwd: string, command: string[]): string {
   });
 }
 
-function runGitUntrackedDiff(cwd: string, pathArgs: string[]): string {
-  try {
-    return execFileSync("git", ["diff", "--no-index", NULL_DEVICE, ...pathArgs], {
-      cwd,
-      encoding: "utf-8",
-      maxBuffer: 1024 * 1024,
-      timeout: 10000,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-  } catch (err) {
-    const stdout =
-      err && typeof err === "object" && "stdout" in err && typeof (err as { stdout?: unknown }).stdout === "string"
-        ? (err as { stdout: string }).stdout
-        : "";
-    if (stdout) return stdout;
-    throw err;
+function listGitUntrackedFiles(cwd: string, files?: string[], exclude?: string[]): string[] {
+  const output = execFileSync("git", ["ls-files", "--others", "--exclude-standard"], {
+    cwd,
+    encoding: "utf-8",
+    maxBuffer: 1024 * 1024,
+    timeout: 10000,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+
+  const excludePatterns =
+    exclude?.filter((e) => isSafeRelativePath(e)).map((e) => new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))) ??
+    [];
+
+  return output
+    .split(/\r?\n/)
+    .filter((f) => f.length > 0 && isSafeRelativePath(f))
+    .filter((f) => {
+      if (!files || files.length === 0) return true;
+      return files.some((pattern) => isSafeRelativePath(pattern) && minimatch(f, pattern));
+    })
+    .filter((f) => !excludePatterns.some((re) => re.test(f)));
+}
+
+function minimatch(path: string, pattern: string): boolean {
+  const segments = pattern.split("/");
+  if (segments.length === 1) {
+    // Bare name matches any filename or directory segment.
+    return path === pattern || path.split("/").includes(pattern) || path.endsWith(`/${pattern}`);
   }
+  return path === pattern || path.startsWith(pattern.endsWith("/") ? pattern : `${pattern}/`);
+}
+
+function runGitUntrackedDiff(cwd: string, files: string[]): string {
+  const diffs: string[] = [];
+  for (const file of files) {
+    try {
+      const diff = execFileSync("git", ["diff", "--no-index", NULL_DEVICE, file], {
+        cwd,
+        encoding: "utf-8",
+        maxBuffer: 1024 * 1024,
+        timeout: 10000,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      if (diff.trim()) diffs.push(diff);
+    } catch (err) {
+      const stdout =
+        err && typeof err === "object" && "stdout" in err && typeof (err as { stdout?: unknown }).stdout === "string"
+          ? (err as { stdout: string }).stdout
+          : "";
+      if (stdout.trim()) diffs.push(stdout);
+    }
+  }
+  return diffs.join("\n");
 }
 
 function processDiff(diff: string, vcs: VcsType, maxDiffChars: number): DiffResult {

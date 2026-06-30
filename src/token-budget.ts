@@ -61,8 +61,3 @@ function resolveOutputTokens(maxOutputTokens: number, thinking?: string): number
   if (!thinking || thinking === "off") return Math.min(maxOutputTokens, 2048);
   return Math.min(maxOutputTokens, 8192);
 }
-
-export function clampToBudget(actualTokens: number, budget: ReviewBudget): number {
-  const cap = budget.hardInputCap ?? budget.availableInputTokens;
-  return Math.min(actualTokens, cap);
-}

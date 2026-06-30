@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { getAgentDir } from "./config.js";
 import { logEvent } from "./logger.js";
 
@@ -17,7 +17,6 @@ const ALLOWED_COMMANDS = new Set([
   "lpass",
   "cat",
   "echo",
-  "printenv",
 ]);
 
 export function resolveApiKey(provider: string): string | undefined {
@@ -67,6 +66,7 @@ function resolveKeyValue(key: string): string | undefined {
         const varName = key.slice(2, end);
         return process.env[varName];
       }
+      return undefined;
     }
     return process.env[key.slice(1)];
   }
@@ -101,15 +101,15 @@ function runAllowedCommand(command: string): string | undefined {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  return output;
+  return output.trim();
 }
 
 function isSafeFileArg(arg: string): boolean {
   if (arg.startsWith("-") || arg.includes("\0")) return false;
   if (arg.includes("..") || isAbsolute(arg)) return false;
-  const resolved = resolve(getAgentDir(), arg);
+  const resolved = normalize(resolve(getAgentDir(), arg));
   const normalizedAgentDir = normalize(getAgentDir());
-  return resolved === normalizedAgentDir || resolved.startsWith(normalizedAgentDir + "/");
+  return resolved === normalizedAgentDir || resolved.startsWith(normalizedAgentDir + sep);
 }
 
 function tokenize(command: string): string[] {

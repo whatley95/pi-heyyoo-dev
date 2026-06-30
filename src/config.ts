@@ -50,6 +50,12 @@ export function loadHeyyooConfig(cwd: string): HeyyooConfig {
   return config;
 }
 
+function normalizeCostBudgetUsd(value: unknown, fallback: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < 0) return undefined;
+  return value;
+}
+
 function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
   if (!override || typeof override !== "object" || Array.isArray(override)) {
     return base;
@@ -66,8 +72,10 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
         typeof o.secondary?.maxOutputTokens === "number" ? o.secondary.maxOutputTokens : base.secondary.maxOutputTokens,
     },
     autoJudge: typeof o.autoJudge === "boolean" ? o.autoJudge : base.autoJudge,
-    preReviewCommands: Array.isArray(o.preReviewCommands) ? o.preReviewCommands.map(String) : base.preReviewCommands,
-    costBudgetUsd: typeof o.costBudgetUsd === "number" ? o.costBudgetUsd : base.costBudgetUsd,
+    preReviewCommands: Array.isArray(o.preReviewCommands)
+      ? o.preReviewCommands.filter((c): c is string => typeof c === "string")
+      : base.preReviewCommands,
+    costBudgetUsd: normalizeCostBudgetUsd(o.costBudgetUsd, base.costBudgetUsd),
     reviewMaxDiffChars: typeof o.reviewMaxDiffChars === "number" ? o.reviewMaxDiffChars : base.reviewMaxDiffChars,
     reviewFullFileThresholdLines:
       typeof o.reviewFullFileThresholdLines === "number"

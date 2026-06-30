@@ -1,4 +1,5 @@
 import { Text } from "@earendil-works/pi-tui";
+import { formatCost } from "./cost-tracker.js";
 import type { YooToolParams, YooToolResult, ReviewIssue } from "./types.js";
 
 interface Theme {
@@ -57,7 +58,7 @@ function formatCostLine(result: YooToolResult): string | undefined {
   if (!result.cost) return undefined;
   const inTokens = formatTokenCount(result.cost.estimatedInputTokens);
   const outTokens = formatTokenCount(result.cost.estimatedOutputTokens);
-  const cost = formatUsd(result.cost.estimatedCostUsd);
+  const cost = formatCost(result.cost.estimatedCostUsd);
   return `${inTokens} in · ${outTokens} out · ${cost}`;
 }
 
@@ -65,11 +66,6 @@ function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
   return String(n);
-}
-
-function formatUsd(usd: number): string {
-  if (usd < 0.001) return `${(usd * 1000).toFixed(2)}¢`;
-  return `$${usd.toFixed(4)}`;
 }
 
 function severityColor(severity: ReviewIssue["severity"]): string {
@@ -159,13 +155,13 @@ export function renderResult(
 
     if (r.review.issues.length > 0) {
       lines.push(`  ${theme.fg("dim", `${r.review.issues.length} issue(s) found:`)}`);
-      for (const issue of r.review.issues.slice(0, 5)) {
+      for (const issue of r.review.issues.slice(0, 10)) {
         const color = severityColor(issue.severity);
         const loc = issue.file ? `${issue.file}${issue.line ? `:${issue.line}` : ""}` : "unknown";
         lines.push(`    ${theme.fg(color, `${severityIcon(issue.severity)} ${loc}`)}: ${truncate(issue.issue, 70)}`);
       }
-      if (r.review.issues.length > 5) {
-        lines.push(`    ${theme.fg("dim", `… and ${r.review.issues.length - 5} more`)}`);
+      if (r.review.issues.length > 10) {
+        lines.push(`    ${theme.fg("dim", `… and ${r.review.issues.length - 10} more`)}`);
       }
     }
 

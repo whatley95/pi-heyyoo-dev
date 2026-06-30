@@ -60,7 +60,7 @@ If no secondary model is configured, yoo returns an error. Configure `pi-heyyoo.
 | `secondary` | object | `{ provider, id, thinking? }` for the secondary model |
 | `autoJudge` | boolean | Run `yoo.judge` automatically when the last plan step passes review |
 | `preReviewCommands` | string[] | Commands to run before each review; output is included in the review prompt |
-| `costBudgetUsd` | number | Maximum estimated session spend before yoo stops with an error |
+| `costBudgetUsd` | number | Maximum estimated session spend before yoo stops with an error. Negative values are treated as unset; `0` means no spend is allowed |
 | `reviewMaxDiffChars` | number | Legacy cap on diff characters; prefer `reviewMaxInputTokens` |
 | `reviewFullFileThresholdLines` | number | Include full content for changed files under this line count (default: 300) |
 | `reviewMaxInputTokens` | number | Hard cap on review input tokens |
@@ -99,7 +99,7 @@ The `yoo` tool is called by the main agent during development:
 | `/yoo-status` | Detailed diagnostics: config, plan, VCS, conventions, session cost |
 | `/yoo-info` | Alias for `/yoo-status` |
 | `/yoo-model` | Interactively pick the secondary model from configured providers |
-| `/yoo-config <provider.model>` | Guide for configuring the secondary model |
+| `/yoo-config <provider.model>` | Set the secondary model directly (e.g. `/yoo-config openai.gpt-4o`) |
 | `/yoo-clear` | Clear the active plan, session state, cost, memory, and conventions |
 | `/yoo-next` | Recommend the next step based on the active plan |
 | `/yoo-done` | Mark the current plan step complete and recommend the next step |
@@ -179,7 +179,7 @@ If a single plan step fails review 3 times, yoo marks the review as escalated. T
 
 yoo watches for repetitive patterns and sends a steering message if:
 
-- `yoo.review` or `yoo.judge` is called 3+ times in a row without real code edits
+- `yoo` tools are called 3+ times in a row without real code edits
 - The same `yoo` call is repeated with the same description
 
 This prevents the main agent from spinning in review-fix-review cycles.
