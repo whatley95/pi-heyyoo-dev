@@ -31,6 +31,7 @@ import { recordCost, getSessionCost, formatCost, resetCost } from "./cost-tracke
 import { recordIssues, getPastIssuesForFiles, clearMemory } from "./review-memory.js";
 import { loadConventions, saveConventions, scanProjectConventions, formatConventions, clearConventions, mergeConventions, filterSourceFiles, formatConfigFiles } from "./conventions.js";
 import { runPreReviewCommands, formatPreReviewOutput } from "./pre-review.js";
+import { logEvent, readRecentLogs } from "./logger.js";
 
 const sessionStates = new Map<string, HeyyooSessionState>();
 
@@ -152,13 +153,14 @@ async function executeYooPlan(
 
   emitProgress(onUpdate, "plan", "Calling secondary model…");
   const { system, user } = buildPlanPrompt(task, conventionsText);
-  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal, config.secondary.thinking, cwd);
 
   emitProgress(onUpdate, "plan", "Parsing plan…");
   const parsed = parseJsonResponse(raw);
   const plan = validatePlanResult(parsed);
 
   if (!plan) {
+    logEvent(cwd, "warn", "Failed to parse plan from secondary model response", { raw: raw.slice(0, 2000) });
     return { action: "plan", error: "Failed to parse plan from secondary model response.", plan: { todo: [task], acceptanceCriteria: [], summary: raw.slice(0, 200) }, cost: recordCostWithBudget(cwd, usage) };
   }
 
@@ -221,7 +223,7 @@ async function executeYooReview(
   );
 
   emitProgress(onUpdate, "review", "Calling secondary model…");
-  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal, config.secondary.thinking, cwd);
 
   emitProgress(onUpdate, "review", "Parsing review…");
   const parsed = parseJsonResponse(raw);
@@ -229,6 +231,7 @@ async function executeYooReview(
   const cost = recordCostWithBudget(cwd, usage);
 
   if (!review) {
+    logEvent(cwd, "warn", "Failed to parse review from secondary model response", { raw: raw.slice(0, 2000) });
     return { action: "review", error: "Failed to parse review from secondary model response.", review: { verdict: "needs-work", issues: [], suggestions: [], consensus: false }, cost };
   }
 
@@ -279,13 +282,14 @@ async function executeYooSuggest(
 
   const { system, user } = buildSuggestPrompt(question, conventionsText);
   emitProgress(onUpdate, "suggest", "Calling secondary model…");
-  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal, config.secondary.thinking, cwd);
 
   emitProgress(onUpdate, "suggest", "Parsing suggestions…");
   const parsed = parseJsonResponse(raw);
   const suggest = validateSuggestResult(parsed);
 
   if (!suggest) {
+    logEvent(cwd, "warn", "Failed to parse suggestions from secondary model response", { raw: raw.slice(0, 2000) });
     return { action: "suggest", error: "Failed to parse suggestions from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
   }
 
@@ -311,13 +315,14 @@ async function executeYooRecommend(
 
   const { system, user } = buildRecommendPrompt(situation, state.plan?.todo, conventionsText);
   emitProgress(onUpdate, "recommend", "Calling secondary model…");
-  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal, config.secondary.thinking, cwd);
 
   emitProgress(onUpdate, "recommend", "Parsing recommendation…");
   const parsed = parseJsonResponse(raw);
   const recommend = validateRecommendResult(parsed);
 
   if (!recommend) {
+    logEvent(cwd, "warn", "Failed to parse recommendation from secondary model response", { raw: raw.slice(0, 2000) });
     return { action: "recommend", error: "Failed to parse recommendation from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
   }
 
@@ -340,13 +345,14 @@ async function executeYooJudge(
   const { system, user } = buildJudgePrompt(description, state.plan?.todo, state.plan?.acceptanceCriteria, reviewHistory);
 
   emitProgress(onUpdate, "judge", "Calling secondary model…");
-  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+  const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal, config.secondary.thinking, cwd);
 
   emitProgress(onUpdate, "judge", "Parsing judgment…");
   const parsed = parseJsonResponse(raw);
   const judge = validateJudgeResult(parsed);
 
   if (!judge) {
+    logEvent(cwd, "warn", "Failed to parse judgment from secondary model response", { raw: raw.slice(0, 2000) });
     return { action: "judge", error: "Failed to parse judgment from secondary model response.", cost: recordCostWithBudget(cwd, usage) };
   }
 
@@ -377,11 +383,15 @@ async function executeYooScan(
     `${user}\n\nFiles:\n${filesForPrompt.join("\n")}${configFilesText}`,
     signal,
     config.secondary.thinking,
+    cwd,
   );
 
   emitProgress(onUpdate, "scan", "Merging conventions…");
   const parsed = parseJsonResponse(raw);
   const llmConventions = validateConventionsResult(parsed);
+  if (!llmConventions && raw.trim().length > 0) {
+    logEvent(cwd, "warn", "Failed to parse scan conventions from secondary model response", { raw: raw.slice(0, 2000) });
+  }
   const conventions = llmConventions
     ? mergeConventions(localScan.conventions, llmConventions)
     : localScan.conventions;
@@ -531,6 +541,7 @@ export default function (pi: ExtensionAPI) {
         }
       } catch (err) {
         const action: YooAction = p.plan ? "plan" : p.review ? "review" : p.suggest ? "suggest" : p.recommend ? "recommend" : p.judge ? "judge" : "scan";
+        logEvent(ctx.cwd, "error", `yoo tool ${action} failed`, { error: err instanceof Error ? err.message : String(err) });
         result = { action, error: err instanceof Error ? err.message : String(err) };
       }
 
@@ -599,7 +610,9 @@ export default function (pi: ExtensionAPI) {
             return;
         }
       } catch (err) {
-        ctx.ui.notify(`yoo error: ${err instanceof Error ? err.message : String(err)}`, "error");
+        const message = err instanceof Error ? err.message : String(err);
+        logEvent(ctx.cwd, "error", `yoo ${subcommand} command failed`, { error: message });
+        ctx.ui.notify(`yoo error: ${message}`, "error");
         return;
       }
 
@@ -769,6 +782,18 @@ export default function (pi: ExtensionAPI) {
       });
       const text = formatResultText(result);
       ctx.ui.notify(text.slice(0, 500), result.error ? "error" : "info");
+    },
+  });
+
+  pi.registerCommand("yoo-logs", {
+    description: "Show recent yoo error/event log entries for this project",
+    handler: async (_args, ctx) => {
+      const entries = readRecentLogs(ctx.cwd, 50);
+      if (entries.length === 0) {
+        ctx.ui.notify("No yoo log entries yet.", "info");
+        return;
+      }
+      await ctx.ui.select("Recent yoo logs", entries);
     },
   });
 }
