@@ -87,11 +87,14 @@ const FALLBACK_SCAN_LIMIT = 500;
 const EXCLUDED_SCAN_DIRS = new Set(["node_modules", ".pi", ".git", "dist", "build", "out", "coverage"]);
 
 function listTrackedFiles(cwd: string): string[] {
-  try {
-    return execSync("git ls-files", { cwd, encoding: "utf-8", maxBuffer: 1024 * 1024, timeout: 10000 })
-      .split(/\r?\n/)
-      .filter((f) => f.length > 0 && !f.includes("node_modules/") && !f.includes(".pi/"));
-  } catch { /* not a git repo */ }
+  if (existsSync(join(cwd, ".git"))) {
+    try {
+      return execSync("git ls-files", { cwd, encoding: "utf-8", maxBuffer: 1024 * 1024, timeout: 10000, stdio: ["pipe", "pipe", "pipe"] })
+        .split(/\r?\n/)
+        .filter((f) => f.length > 0 && !f.includes("node_modules/") && !f.includes(".pi/"));
+    } catch { /* git command failed */ }
+  }
+
 
   // fallback: portable recursive directory scan (works on Windows without Unix shell tools)
   try {
