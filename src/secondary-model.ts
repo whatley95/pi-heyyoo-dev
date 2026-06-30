@@ -80,14 +80,13 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
   google: {
     style: "openai-compatible",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    queryAuthKey: "key",
+    authHeader: "x-goog-api-key",
+    authPrefix: "",
   },
 };
 
 export function getProviderApiInfo(provider: string): ProviderApiInfo | undefined {
-  return PROVIDER_API_MAP[provider];
+  return PROVIDER_API_MAP[provider.toLowerCase()];
 }
 
 export async function callSecondaryModel(
@@ -99,6 +98,7 @@ export async function callSecondaryModel(
   thinking?: string,
   cwd?: string,
 ): Promise<{ content: string; usage: UsageCost }> {
+  provider = provider.toLowerCase();
   const apiInfo = getProviderApiInfo(provider);
   if (!apiInfo) {
     throw new Error(`Unknown provider: ${provider}. Supported providers: ${Object.keys(PROVIDER_API_MAP).join(", ")}`);
@@ -113,7 +113,7 @@ export async function callSecondaryModel(
 
   if (cwd) {
     const budgetUsd = loadHeyyooConfig(cwd).costBudgetUsd;
-    if (budgetUsd !== undefined && budgetUsd > 0) {
+    if (budgetUsd !== undefined && budgetUsd >= 0) {
       const estimatedInputTokens = estimateTokens(systemPrompt + userPrompt);
       const estimatedOutputTokens = thinking && thinking.toLowerCase() !== "off" ? 8192 : 2048;
       const projectedCost = estimateCost(provider, model, estimatedInputTokens, estimatedOutputTokens);
@@ -194,6 +194,25 @@ function buildUsage(
   };
 }
 
+function applyReportedUsage(
+  provider: string,
+  model: string,
+  usage: UsageCost,
+  inputTokens: unknown,
+  outputTokens: unknown,
+): UsageCost {
+  const inTokens =
+    typeof inputTokens === "number" && Number.isFinite(inputTokens) ? inputTokens : usage.estimatedInputTokens;
+  const outTokens =
+    typeof outputTokens === "number" && Number.isFinite(outputTokens) ? outputTokens : usage.estimatedOutputTokens;
+  return {
+    ...usage,
+    estimatedInputTokens: inTokens,
+    estimatedOutputTokens: outTokens,
+    estimatedCostUsd: estimateCost(provider, model, inTokens, outTokens),
+  };
+}
+
 async function callOpenAiCompatibleApi(
   provider: string,
   apiInfo: ProviderApiInfo,
@@ -207,8 +226,9 @@ async function callOpenAiCompatibleApi(
   const url = buildOpenAiUrl(apiInfo, apiKey);
 
   const supportsReasoning = supportsReasoningEffort(provider, model);
-  const supportsAnthropicThinking = supportsThinkingParam(provider, model);
-  const thinkingEnabled = Boolean(thinking && (supportsReasoning || supportsAnthropicThinking));
+  const supportsAnthropicThinking = modelSupportsAnthropicThinking(provider, model);
+  const thinkingEnabled =
+    Boolean(thinking) && thinking!.toLowerCase() !== "off" && (supportsReasoning || supportsAnthropicThinking);
   // When thinking/reasoning is enabled, reserve room for both internal reasoning and visible output.
   const outputTokenLimit = thinkingEnabled ? 8192 : 2048;
 
@@ -229,7 +249,7 @@ async function callOpenAiCompatibleApi(
       body.thinking = { type: "enabled", budget_tokens: thinkingBudget(thinking ?? "medium") };
     }
   }
-  if (supportsMaxCompletionTokens(provider, model)) {
+  if (provider === "openai" && supportsMaxCompletionTokens(provider, model)) {
     delete body.max_tokens;
     body.max_completion_tokens = outputTokenLimit;
   }
@@ -287,12 +307,13 @@ async function callOpenAiCompatibleApi(
     );
   }
 
-  const usage = buildUsage(provider, model, systemPrompt, userPrompt, content);
-  if (data.usage?.prompt_tokens !== undefined && data.usage.completion_tokens !== undefined) {
-    usage.estimatedInputTokens = data.usage.prompt_tokens;
-    usage.estimatedOutputTokens = data.usage.completion_tokens;
-  }
-  usage.estimatedCostUsd = estimateCost(provider, model, usage.estimatedInputTokens, usage.estimatedOutputTokens);
+  const usage = applyReportedUsage(
+    provider,
+    model,
+    buildUsage(provider, model, systemPrompt, userPrompt, content),
+    data.usage?.prompt_tokens,
+    data.usage?.completion_tokens,
+  );
 
   return { content, usage };
 }
@@ -344,7 +365,7 @@ async function callAnthropicApi(
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = `${apiInfo.baseUrl}/messages`;
 
-  const thinkingEnabled = Boolean(thinking);
+  const thinkingEnabled = Boolean(thinking) && (thinking as string).toLowerCase() !== "off";
   // Anthropic counts thinking tokens against max_tokens, so reserve room for visible output.
   const outputTokenLimit = thinkingEnabled ? 8192 : 2048;
 
@@ -394,20 +415,35 @@ async function callAnthropicApi(
     throw new Error(`Empty response from secondary model. Raw: ${JSON.stringify(data).slice(0, 800)}`);
   }
 
-  const usage = buildUsage(provider, model, systemPrompt, userPrompt, textContent);
-  if (data.usage?.input_tokens !== undefined && data.usage.output_tokens !== undefined) {
-    usage.estimatedInputTokens = data.usage.input_tokens;
-    usage.estimatedOutputTokens = data.usage.output_tokens;
-  }
-  usage.estimatedCostUsd = estimateCost(provider, model, usage.estimatedInputTokens, usage.estimatedOutputTokens);
+  const usage = applyReportedUsage(
+    provider,
+    model,
+    buildUsage(provider, model, systemPrompt, userPrompt, textContent),
+    data.usage?.input_tokens,
+    data.usage?.output_tokens,
+  );
 
   return { content: textContent, usage };
 }
 
-function supportsThinkingParam(provider: string, model: string): boolean {
-  // Anthropic-style thinking parameter. Used only when reasoning_effort is not supported.
+function modelSupportsAnthropicThinking(provider: string, model: string): boolean {
+  // Anthropic extended thinking is supported by Claude 4 series and later thinking-enabled models.
   const lc = `${provider}:${model}`.toLowerCase();
-  if (lc.startsWith("openrouter:")) return true;
+  const modelLc = model.toLowerCase();
+  const thinkingModels = new Set([
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    "claude-3-7-sonnet",
+    "claude-3.7-sonnet",
+    "anthropic/claude-3-7-sonnet",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-opus-4-5",
+  ]);
+  if (thinkingModels.has(modelLc)) return true;
+  if (lc.startsWith("openrouter:")) {
+    // OpenRouter passes provider-specific params only for Anthropic thinking models.
+    return [...thinkingModels].some((m) => modelLc.includes(m.replace("anthropic/", "")));
+  }
   return false;
 }
 
@@ -415,10 +451,11 @@ function supportsReasoningEffort(provider: string, model: string): boolean {
   // OpenAI-style reasoning_effort is supported by OpenAI o-series/gpt-5 and DeepSeek reasoning models.
   const lc = `${provider}:${model}`.toLowerCase();
   const modelLc = model.toLowerCase();
-  if (modelLc.startsWith("deepseek")) return true;
+  const deepseekReasoner = /^deepseek[-/]?reasoner/;
+  if (deepseekReasoner.test(modelLc)) return true;
   if (modelLc.startsWith("o") && /^o\d/.test(modelLc)) return true;
   if (modelLc.startsWith("gpt-5")) return true;
-  if (lc.startsWith("openrouter:deepseek")) return true;
+  if (lc.startsWith("openrouter:deepseek") && deepseekReasoner.test(lc)) return true;
   return false;
 }
 
@@ -464,8 +501,24 @@ async function fetchWithRetry(url: string, init: RequestInit, maxRetries = 2, ba
     }
 
     if (attempt < maxRetries) {
+      if (init.signal?.aborted) {
+        throw new Error("Secondary model request aborted");
+      }
       const delay = baseDelayMs * 2 ** attempt;
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delay);
+        const signal = init.signal;
+        if (!signal) return;
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      });
+      if (init.signal?.aborted) {
+        throw new Error("Secondary model request aborted");
+      }
     }
   }
   throw lastError ?? new Error("Secondary model request failed after retries");

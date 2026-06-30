@@ -60,7 +60,7 @@ export function recordCost(cwd: string, usage: UsageCost, budgetUsd?: number): U
     sessionCostUsd: log.costUsd,
   };
 
-  if (budgetUsd && log.costUsd > budgetUsd) {
+  if (budgetUsd !== undefined && budgetUsd >= 0 && log.costUsd > budgetUsd) {
     throw new Error(
       `yoo cost budget exceeded: ${formatCost(log.costUsd)} / ${formatCost(budgetUsd)}. ` +
         `Increase pi-heyyoo.costBudgetUsd in settings or reset with /yoo-clear.`,

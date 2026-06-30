@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getConfigDirName, getProjectConfigPath } from "./pi-paths.js";
@@ -100,21 +100,21 @@ function getExcludedScanDirs(): Set<string> {
 function listTrackedFiles(cwd: string): string[] {
   if (existsSync(join(cwd, ".git"))) {
     try {
-      return execSync("git ls-files", {
+      const output = execFileSync("git", ["ls-files"], {
         cwd,
         encoding: "utf-8",
         maxBuffer: 1024 * 1024,
         timeout: 10000,
         stdio: ["pipe", "pipe", "pipe"],
-      })
-        .split(/\r?\n/)
-        .filter((f) => {
-          if (f.length === 0) return false;
-          if (f.includes("node_modules/")) return false;
-          const configDir = getConfigDirName();
-          if (f.includes(`${configDir}/`)) return false;
-          return true;
-        });
+        windowsHide: true,
+      });
+      return output.split(/\r?\n/).filter((f) => {
+        if (f.length === 0) return false;
+        if (f.includes("node_modules/")) return false;
+        const configDir = getConfigDirName();
+        if (f.includes(`${configDir}/`)) return false;
+        return true;
+      });
     } catch {
       /* git command failed */
     }
@@ -247,10 +247,10 @@ function emptyConventions(): Conventions {
 
 export function inferNaming(files: string[]): string {
   const names = files.map((f) => f.split("/").pop() || "");
-  const camel = names.some((n) => /^[a-z][a-zA-Z0-9]*\.(ts|js|tsx|jsx)$/.test(n));
-  const pascal = names.some((n) => /^[A-Z][a-zA-Z0-9]*\.(ts|js|tsx|jsx)$/.test(n));
-  const snake = names.some((n) => /^[a-z0-9_]+\.(ts|js|py|rs|go)$/.test(n));
-  const kebab = names.some((n) => /^[a-z0-9-]+\.(ts|js)$/.test(n));
+  const camel = names.some((n) => /^[a-z][a-zA-Z0-9]*\.[a-zA-Z0-9]+$/.test(n));
+  const pascal = names.some((n) => /^[A-Z][a-zA-Z0-9]*\.[a-zA-Z0-9]+$/.test(n));
+  const snake = names.some((n) => /^[a-z0-9_]+\.[a-zA-Z0-9]+$/.test(n));
+  const kebab = names.some((n) => /^[a-z0-9-]+\.[a-zA-Z0-9]+$/.test(n));
   const detected = [camel && "camelCase", pascal && "PascalCase", snake && "snake_case", kebab && "kebab-case"].filter(
     Boolean,
   );

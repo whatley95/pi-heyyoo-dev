@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "./pi-paths.js";
 import { loadHeyyooConfig } from "./config.js";
@@ -26,7 +26,7 @@ import {
   validateConventionsResult,
 } from "./prompts.js";
 import { calculateReviewBudget, estimateTokens } from "./token-budget.js";
-import { loadFileContentsForReview } from "./file-loader.js";
+import { loadFileContentsForReview, isReviewableFile } from "./file-loader.js";
 import { renderCall, renderResult } from "./render.js";
 import { loadState, saveState, clearState } from "./plan-store.js";
 import type { YooToolParams, YooToolResult, HeyyooSessionState, PlanResult, YooAction, UsageCost } from "./types.js";
@@ -55,7 +55,7 @@ import { createProgressReporter, clearYooStatus, type ProgressReporter } from ".
 
 const STAGES = {
   plan: 3,
-  review: 10,
+  review: 7,
   suggest: 3,
   recommend: 3,
   judge: 3,
@@ -67,7 +67,7 @@ const sessionStates = new Map<string, HeyyooSessionState>();
 function getState(cwd: string): HeyyooSessionState {
   let state = sessionStates.get(cwd);
   if (!state) {
-    state = loadState(cwd) ?? { completedSteps: 0, totalSteps: 0, reviewRounds: 0 };
+    state = loadState(cwd) ?? { completedSteps: 0, totalSteps: 0, reviewRounds: 0, reviewedSteps: [] };
     sessionStates.set(cwd, state);
   }
   return state;
@@ -79,14 +79,16 @@ function setPlan(cwd: string, plan: PlanResult): void {
   state.totalSteps = plan.todo.length;
   state.completedSteps = 0;
   state.reviewRounds = 0;
+  state.reviewedSteps = new Array(plan.todo.length).fill(false);
   saveState(cwd, state);
 }
 
-function markStepComplete(cwd: string): void {
+function markStepComplete(cwd: string, reviewed = false): void {
   const state = getState(cwd);
   if (state.totalSteps > 0 && state.completedSteps < state.totalSteps) {
     state.completedSteps++;
     state.reviewRounds = 0;
+    state.reviewedSteps[state.completedSteps - 1] = reviewed;
     saveState(cwd, state);
   }
 }
@@ -111,7 +113,8 @@ function buildReviewHistory(cwd: string): string {
   const lines: string[] = [];
   for (let i = 0; i < state.plan.todo.length; i++) {
     if (i < state.completedSteps) {
-      lines.push(`✓ Step ${i + 1}: ${state.plan.todo[i]} — reviewed and passed`);
+      const reviewed = state.reviewedSteps[i] ? "reviewed and passed" : "marked complete (not reviewed)";
+      lines.push(`✓ Step ${i + 1}: ${state.plan.todo[i]} — ${reviewed}`);
     } else if (i === state.completedSteps) {
       lines.push(`→ Step ${i + 1}: ${state.plan.todo[i]} — current (may or may not be done)`);
     } else {
@@ -128,7 +131,9 @@ function getSessionContext(ctx: ExtensionContext): string {
     const entries = ctx.sessionManager?.getEntries();
     if (!Array.isArray(entries) || entries.length === 0) return "";
 
-    const recent = entries.slice(-10);
+    // Exclude the most recent entry because it is the current user/tool turn that
+    // triggered this yoo call; including it would add self-referential noise.
+    const recent = entries.length > 1 ? entries.slice(-10, -1) : [];
     const lines: string[] = [];
     let total = 0;
 
@@ -249,56 +254,75 @@ async function executeYooReview(
     conventionsText = formatConventions(conventions);
   }
 
-  let preReviewOutput = "";
-  if (config.preReviewCommands && config.preReviewCommands.length > 0) {
-    progress(3, STAGES.review, "Running pre-review commands…");
-    const results = runPreReviewCommands(cwd, config.preReviewCommands);
-    preReviewOutput = formatPreReviewOutput(results);
-  } else {
-    progress(3, STAGES.review, "Preparing review context…");
-  }
-
   const memoryContext = getPastIssuesForFiles(cwd, changedFiles);
 
-  progress(4, STAGES.review, "Calculating token budget…");
-  const budget = calculateReviewBudget(config.secondary.provider, config.secondary.id, config, {
+  progress(3, STAGES.review, "Calculating token budget…");
+  const baseBudget = calculateReviewBudget(config.secondary.provider, config.secondary.id, config, {
     systemPrompt: "", // estimated separately below to avoid building prompt twice
+    sessionContext,
+    conventionsText,
+    preReviewOutput: "",
+    description,
+    memoryContext,
+  });
+
+  let preReviewOutput = "";
+  if (config.preReviewCommands && config.preReviewCommands.length > 0) {
+    progress(4, STAGES.review, "Running pre-review commands…");
+    const results = runPreReviewCommands(cwd, config.preReviewCommands);
+    preReviewOutput = formatPreReviewOutput(results);
+    const preReviewChars = baseBudget.availableInputTokens * 4;
+    if (preReviewOutput.length > preReviewChars) {
+      preReviewOutput = preReviewOutput.slice(0, preReviewChars) + "\n… (truncated to token budget)";
+    }
+  } else {
+    progress(4, STAGES.review, "Preparing review context…");
+  }
+
+  const strategy = config.reviewStrategy ?? "auto";
+  const fullFileThresholdLines = config.reviewFullFileThresholdLines ?? 300;
+  progress(5, STAGES.review, "Calculating token budget with pre-review output…");
+  const budgetWithPreReview = calculateReviewBudget(config.secondary.provider, config.secondary.id, config, {
+    systemPrompt: "",
     sessionContext,
     conventionsText,
     preReviewOutput,
     description,
     memoryContext,
   });
-
-  const strategy = config.reviewStrategy ?? "auto";
-  const fullFileThresholdLines = config.reviewFullFileThresholdLines ?? 300;
-  progress(5, STAGES.review, "Loading changed file contents…");
+  progress(6, STAGES.review, "Loading changed file contents…");
   const fileResult =
     strategy === "diff-only"
       ? { entries: [], dropped: [], totalTokens: 0 }
       : loadFileContentsForReview({
           cwd,
           changedFiles,
-          budget,
+          budget: budgetWithPreReview,
           strategy,
           fullFileThresholdLines,
         });
 
   // Diff gets whatever budget remains after fixed parts and file contents.
   const systemPromptEstimate = 1000; // approximate; safety margin absorbs error
-  const remainingForDiff = Math.max(0, budget.availableInputTokens - fileResult.totalTokens - systemPromptEstimate);
+  const remainingForDiff = Math.max(
+    0,
+    budgetWithPreReview.availableInputTokens - fileResult.totalTokens - systemPromptEstimate,
+  );
   const diffTokens = estimateTokens(diff);
   const finalDiff = diffTokens > remainingForDiff ? diff.slice(0, remainingForDiff * 4) + "\n... diff truncated" : diff;
   const diffTruncated = truncated || finalDiff !== diff;
 
-  progress(6, STAGES.review, "Building review prompt…");
+  // Surface context limitations so the user knows the review was scoped.
+  const droppedForBudget = fileResult.dropped.filter((f) => isReviewableFile(f));
+
+  progress(7, STAGES.review, "Building review prompt…");
   const { system, user } = buildAdaptiveReviewPrompt(
     description,
     finalDiff,
     fileResult.entries.map((e) => ({
       file: e.file,
       content: e.content,
-      mode: e.mode === "diff-only" ? "outline" : e.mode,
+      mode: e.mode,
     })),
     {
       vcs,
@@ -308,12 +332,12 @@ async function executeYooReview(
       preReviewOutput,
       memoryContext,
       truncated: diffTruncated,
-      droppedFiles: fileResult.dropped,
-      budgetNote: `Context window: ${budget.contextWindow.toLocaleString()} tokens. Reserved output: ${budget.reservedOutputTokens.toLocaleString()}. Available for context: ${budget.availableInputTokens.toLocaleString()}.`,
+      droppedFiles: droppedForBudget,
+      budgetNote: `Context window: ${baseBudget.contextWindow.toLocaleString()} tokens. Reserved output: ${baseBudget.reservedOutputTokens.toLocaleString()}. Available for context: ${baseBudget.availableInputTokens.toLocaleString()}.`,
     },
   );
 
-  progress(7, STAGES.review, "Calling secondary model…");
+  progress(8, STAGES.review, "Calling secondary model…");
   const { content: raw, usage } = await callSecondaryModel(
     config.secondary.provider,
     config.secondary.id,
@@ -324,7 +348,7 @@ async function executeYooReview(
     cwd,
   );
 
-  progress(8, STAGES.review, "Parsing review…");
+  progress(9, STAGES.review, "Parsing review…");
   const parsed = parseJsonResponse(raw);
   const review = validateReviewResult(parsed);
   const cost = recordCostWithBudget(cwd, usage);
@@ -339,20 +363,19 @@ async function executeYooReview(
     };
   }
 
-  progress(9, STAGES.review, "Recording issues…");
+  progress(10, STAGES.review, "Recording issues…");
   recordIssues(cwd, review.issues);
 
-  // Surface context limitations so the user knows the review was scoped.
   if (diffTruncated) review.truncated = true;
-  if (fileResult.dropped.length > 0) review.droppedFiles = fileResult.dropped;
-  if (diffTruncated || fileResult.dropped.length > 0) {
+  if (droppedForBudget.length > 0) review.droppedFiles = droppedForBudget;
+  if (diffTruncated || droppedForBudget.length > 0) {
     review.suggestions.push(
       "The change is large and some context was omitted. If the review missed something, scope it with --files or increase reviewMaxInputTokens.",
     );
   }
 
   if (review.consensus) {
-    markStepComplete(cwd);
+    markStepComplete(cwd, true);
     const planProgress = getProgress(cwd);
     review.planProgress = `${planProgress.current}/${planProgress.total} steps done`;
     if (planProgress.nextStep) {
@@ -361,15 +384,22 @@ async function executeYooReview(
 
     if (config.autoJudge && planProgress.current === planProgress.total && planProgress.total > 0) {
       progress(10, STAGES.review, "Auto-judging completed work…");
+      const judgeProgress: ProgressReporter = (stage, _total, message) => {
+        progress(STAGES.review, STAGES.review, `[judge] ${message}`);
+      };
       const judgeResult = await executeYooJudge(
         cwd,
         `All ${planProgress.total} plan steps completed.`,
         signal,
-        progress,
+        judgeProgress,
       );
       if (judgeResult.judge) {
         review.autoJudged = true;
-        return { action: "review", review, judge: judgeResult.judge, cost };
+        const mergedCost =
+          cost && judgeResult.cost ? mergeUsageCost(cost, judgeResult.cost) : (cost ?? judgeResult.cost);
+        return { action: "review", review, judge: judgeResult.judge, cost: mergedCost };
+      } else if (judgeResult.error) {
+        review.suggestions.push(`Auto-judge failed: ${judgeResult.error}`);
       }
     }
   } else {
@@ -489,11 +519,19 @@ async function executeYooJudge(
   const state = getState(cwd);
   const reviewHistory = buildReviewHistory(cwd);
   progress(1, STAGES.judge, "Building review history…");
+
+  const conventions = loadConventions(cwd);
+  const conventionsText = conventions ? formatConventions(conventions) : "";
+  const memoryContext = getPastIssuesForFiles(cwd, []);
+
   const { system, user } = buildJudgePrompt(
     description,
     state.plan?.todo,
     state.plan?.acceptanceCriteria,
     reviewHistory,
+    conventionsText,
+    undefined,
+    memoryContext,
   );
 
   progress(2, STAGES.judge, "Calling secondary model…");
@@ -570,6 +608,15 @@ function recordCostWithBudget(cwd: string, usage: UsageCost): UsageCost {
   return recordCost(cwd, usage, config.costBudgetUsd);
 }
 
+function mergeUsageCost(a: UsageCost, b: UsageCost): UsageCost {
+  return {
+    estimatedInputTokens: a.estimatedInputTokens + b.estimatedInputTokens,
+    estimatedOutputTokens: a.estimatedOutputTokens + b.estimatedOutputTokens,
+    estimatedCostUsd: a.estimatedCostUsd + b.estimatedCostUsd,
+    sessionCostUsd: b.sessionCostUsd,
+  };
+}
+
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
@@ -628,7 +675,7 @@ function validateYooToolParams(params: unknown): ValidationResult {
   const stringArray = (value: unknown): string[] | undefined => {
     if (value === undefined) return undefined;
     if (!Array.isArray(value)) return undefined;
-    return value.filter((v): v is string => typeof v === "string");
+    return value.filter((v): v is string => typeof v === "string" && v.length > 0);
   };
 
   const result: YooToolParams = {
@@ -743,6 +790,8 @@ export default function (pi: ExtensionAPI) {
     if (diskState) {
       sessionStates.set(ctx.cwd, diskState);
     }
+    // cost.json tracks estimated spend for the current Pi session.
+    resetCost(ctx.cwd);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -890,10 +939,8 @@ export default function (pi: ExtensionAPI) {
           result = await executeYooRecommend(ctx.cwd, p.recommend, signal, progress);
         } else if (p.judge) {
           result = await executeYooJudge(ctx.cwd, p.judge, signal, progress);
-        } else if (p.scan) {
-          result = await executeYooScan(ctx.cwd, signal, progress);
         } else {
-          result = { action, error: "Unknown action" };
+          result = await executeYooScan(ctx.cwd, signal, progress);
         }
       } catch (err) {
         logEvent(ctx.cwd, "error", `yoo tool ${action} failed`, {
@@ -928,18 +975,22 @@ export default function (pi: ExtensionAPI) {
       const restText = rest.join(" ").trim();
       const signal = undefined;
 
-      const action: YooAction =
-        subcommand.toLowerCase() === "plan"
-          ? "plan"
-          : subcommand.toLowerCase() === "review"
-            ? "review"
-            : subcommand.toLowerCase() === "suggest"
-              ? "suggest"
-              : subcommand.toLowerCase() === "recommend"
-                ? "recommend"
-                : subcommand.toLowerCase() === "judge"
-                  ? "judge"
-                  : "scan";
+      const actionMap: Record<string, YooAction | "status"> = {
+        plan: "plan",
+        review: "review",
+        suggest: "suggest",
+        recommend: "recommend",
+        judge: "judge",
+        scan: "scan",
+        status: "status",
+      };
+      const known = actionMap[subcommand.toLowerCase()];
+      if (!known) {
+        ctx.ui.notify(`Unknown /yoo subcommand: ${subcommand}. Try /yoo status`, "warn");
+        return;
+      }
+
+      const action: YooAction = known === "status" ? "scan" : known;
 
       const progress = createProgressReporter(action, ctx);
       const notifyProgress: ProgressReporter = (stage, total, message) => {
@@ -949,7 +1000,7 @@ export default function (pi: ExtensionAPI) {
 
       let result: YooToolResult;
       try {
-        switch (subcommand.toLowerCase()) {
+        switch (known) {
           case "status":
             await showYooStatus(ctx);
             return;
@@ -981,9 +1032,6 @@ export default function (pi: ExtensionAPI) {
           case "scan":
             result = await executeYooScan(ctx.cwd, signal, notifyProgress);
             break;
-          default:
-            ctx.ui.notify(`Unknown /yoo subcommand: ${subcommand}. Try /yoo status`, "warn");
-            return;
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1003,9 +1051,30 @@ export default function (pi: ExtensionAPI) {
     description: "Configure secondary model for yoo pair-programmer",
     handler: async (args, ctx) => {
       const settingsPath = join(getAgentDir(), "settings.json");
-      ctx.ui.notify(`Edit ${settingsPath} and set pi-heyyoo.secondary.provider and pi-heyyoo.secondary.id`, "info");
-      if (args.trim()) {
-        ctx.ui.notify(`Suggested: ${args.trim()}`, "info");
+      const trimmed = args.trim();
+      if (!trimmed) {
+        ctx.ui.notify(`Edit ${settingsPath} and set pi-heyyoo.secondary.provider and pi-heyyoo.secondary.id`, "info");
+        return;
+      }
+
+      const [provider, ...modelParts] = trimmed.split(/\.|\s+/);
+      const modelId = modelParts.join(".");
+      if (!provider || !modelId) {
+        ctx.ui.notify(`Usage: /yoo-config <provider.model> (e.g. /yoo-config openai.gpt-4o)`, "warn");
+        return;
+      }
+
+      try {
+        const existing = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf-8")) : {};
+        existing["pi-heyyoo"] = existing["pi-heyyoo"] || {};
+        existing["pi-heyyoo"].secondary = existing["pi-heyyoo"].secondary || {};
+        existing["pi-heyyoo"].secondary.provider = provider;
+        existing["pi-heyyoo"].secondary.id = modelId;
+        writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+        ctx.ui.notify(`Set yoo secondary model to ${provider}.${modelId} in ${settingsPath}`, "info");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.ui.notify(`Failed to update settings: ${message}`, "error");
       }
     },
   });
@@ -1013,76 +1082,84 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("yoo-model", {
     description: "Interactively pick the secondary model for yoo",
     handler: async (_args, ctx) => {
-      const registry = ctx.modelRegistry as unknown as {
-        getAvailable(): Array<{ id: string; provider: string }>;
-        getAll?(): Array<{ id: string; provider: string }>;
-        getProviderAuthStatus(provider: string): { configured: boolean };
-        hasConfiguredAuth(model: { provider: string }): boolean;
-      };
-
-      const allModels = typeof registry.getAll === "function" ? registry.getAll() : registry.getAvailable();
-
-      const configuredModels = allModels.filter((m) => {
-        try {
-          return registry.getProviderAuthStatus(m.provider).configured;
-        } catch {
-          return registry.hasConfiguredAuth(m);
-        }
-      });
-
-      if (configuredModels.length === 0) {
-        ctx.ui.notify("No configured models found. Run /login first.", "error");
-        return;
-      }
-
-      const providers = [...new Set(configuredModels.map((m) => m.provider))].sort();
-      let provider: string;
-      if (providers.length === 1) {
-        provider = providers[0];
-      } else {
-        const picked = await ctx.ui.select(
-          "Pick provider:",
-          providers.map((p) => {
-            const count = configuredModels.filter((m) => m.provider === p).length;
-            return `${p} (${count} models)`;
-          }),
-        );
-        if (!picked) return;
-        provider = picked.split(" ")[0];
-      }
-
-      const providerModels = configuredModels
-        .filter((m) => m.provider === provider)
-        .sort((a, b) => a.id.localeCompare(b.id));
-      const modelItems = providerModels.map((m) => m.id);
-      const currentConfig = loadHeyyooConfig(ctx.cwd);
-      const isCurrent = currentConfig.secondary.provider === provider && currentConfig.secondary.id;
-      if (isCurrent) {
-        const idx = modelItems.indexOf(currentConfig.secondary.id);
-        if (idx >= 0) {
-          modelItems[idx] = `${modelItems[idx]} ✓ current`;
-        }
-      }
-
-      const modelIdPicked = await ctx.ui.select(`Pick model for ${provider}:`, modelItems);
-      if (!modelIdPicked) return;
-      const modelId = modelIdPicked.replace(" ✓ current", "");
-
-      const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
-      const currentThinking = currentConfig.secondary.thinking ?? "xhigh";
-      const thinkingItems = thinkingLevels.map(
-        (t) =>
-          `${t}${t === currentThinking && isCurrent && currentConfig.secondary.id === modelId ? " ✓ current" : ""}`,
-      );
-      const thinkingPicked = await ctx.ui.select("Pick thinking level:", thinkingItems);
-      if (!thinkingPicked) return;
-      const thinking = thinkingPicked.replace(" ✓ current", "");
-
       try {
-        const { existsSync, readFileSync, writeFileSync } = await import("node:fs");
-        const { join } = await import("node:path");
-        const agentDir = (await import("@earendil-works/pi-coding-agent")).getAgentDir();
+        const registry = ctx.modelRegistry as unknown as {
+          getAvailable(): Array<{ id: string; provider: string }>;
+          getAll?(): Array<{ id: string; provider: string }>;
+          getProviderAuthStatus(provider: string): { configured: boolean };
+          hasConfiguredAuth(model: { provider: string }): boolean;
+        };
+
+        if (!registry || typeof registry.getAvailable !== "function") {
+          ctx.ui.notify("Model registry is not available in this environment.", "error");
+          return;
+        }
+
+        const allModels = typeof registry.getAll === "function" ? registry.getAll() : registry.getAvailable();
+        if (!Array.isArray(allModels) || allModels.length === 0) {
+          ctx.ui.notify("No models found. Run /login first.", "error");
+          return;
+        }
+
+        const configuredModels = allModels.filter((m) => {
+          try {
+            return registry.getProviderAuthStatus(m.provider).configured;
+          } catch {
+            return registry.hasConfiguredAuth(m);
+          }
+        });
+
+        if (configuredModels.length === 0) {
+          ctx.ui.notify("No configured models found. Run /login first.", "error");
+          return;
+        }
+
+        const providers = [...new Set(configuredModels.map((m) => m.provider))].sort();
+        let provider: string;
+        if (providers.length === 1) {
+          provider = providers[0];
+        } else {
+          const picked = await ctx.ui.select(
+            "Pick provider:",
+            providers.map((p) => {
+              const count = configuredModels.filter((m) => m.provider === p).length;
+              return `${p} (${count} models)`;
+            }),
+          );
+          if (!picked) return;
+          provider = picked.split(" ")[0];
+        }
+
+        const providerModels = configuredModels
+          .filter((m) => m.provider === provider)
+          .sort((a, b) => a.id.localeCompare(b.id));
+        const currentConfig = loadHeyyooConfig(ctx.cwd);
+        const isCurrent = currentConfig.secondary.provider === provider && currentConfig.secondary.id;
+        const modelItems = providerModels.map((m) => {
+          const marker = isCurrent && m.id === currentConfig.secondary.id ? " ✓ current" : "";
+          return `${m.id}${marker}`;
+        });
+
+        const modelIdPicked = await ctx.ui.select(`Pick model for ${provider}:`, modelItems);
+        if (!modelIdPicked) return;
+        const modelId = modelIdPicked.replace(/ ✓ current$/, "");
+
+        const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+        const currentThinking = currentConfig.secondary.thinking ?? "xhigh";
+        const thinkingItems = thinkingLevels.map(
+          (t) =>
+            `${t}${t === currentThinking && isCurrent && currentConfig.secondary.id === modelId ? " ✓ current" : ""}`,
+        );
+        const thinkingPicked = await ctx.ui.select("Pick thinking level:", thinkingItems);
+        if (!thinkingPicked) return;
+        const thinking = thinkingPicked.replace(" ✓ current", "");
+
+        const agentDir = getAgentDir();
         const settingsPath = join(agentDir, "settings.json");
+        if (!existsSync(agentDir)) {
+          const { mkdirSync } = await import("node:fs");
+          mkdirSync(agentDir, { recursive: true });
+        }
         let settings: Record<string, unknown> = {};
         if (existsSync(settingsPath)) {
           settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
@@ -1095,9 +1172,9 @@ export default function (pi: ExtensionAPI) {
         };
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
 
-        ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}). /reload to apply.`, "info");
+        ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}).`, "info");
       } catch (err) {
-        ctx.ui.notify(`Failed to save yoo model config: ${err instanceof Error ? err.message : String(err)}`, "error");
+        ctx.ui.notify(`yoo-model failed: ${err instanceof Error ? err.message : String(err)}`, "error");
       }
     },
   });
@@ -1214,7 +1291,7 @@ async function showYooStatus(ctx: ExtensionContext): Promise<void> {
     config.secondary.provider && config.secondary.id
       ? `  Secondary model: ${config.secondary.provider}:${config.secondary.id}`
       : "  Secondary model: not configured",
-    config.secondary.thinking ? `  Thinking level: ${config.secondary.thinking}` : "",
+    `  Thinking level: ${config.secondary.thinking ?? "off"}`,
     `  Auto-judge: ${config.autoJudge ? "enabled" : "disabled"}`,
     config.preReviewCommands && config.preReviewCommands.length > 0
       ? `  Pre-review commands: ${config.preReviewCommands.join(", ")}`
@@ -1287,14 +1364,8 @@ function formatResultText(result: YooToolResult): string {
   if (result.cost) {
     const inTokens = formatTokenCount(result.cost.estimatedInputTokens);
     const outTokens = formatTokenCount(result.cost.estimatedOutputTokens);
-    const cost =
-      result.cost.estimatedCostUsd < 0.001
-        ? `${(result.cost.estimatedCostUsd * 1000).toFixed(2)}¢`
-        : `$${result.cost.estimatedCostUsd.toFixed(4)}`;
-    const session =
-      result.cost.sessionCostUsd < 0.001
-        ? `${(result.cost.sessionCostUsd * 1000).toFixed(2)}¢`
-        : `$${result.cost.sessionCostUsd.toFixed(4)}`;
+    const cost = formatCost(result.cost.estimatedCostUsd);
+    const session = formatCost(result.cost.sessionCostUsd);
     lines.push(`_${inTokens} in · ${outTokens} out · ${cost} (session ${session})_`);
     lines.push("");
   }

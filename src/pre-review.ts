@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { logEvent } from "./logger.js";
+import { resolveProjectPath } from "./path-security.js";
 
-const SHELL_METACHARACTERS = /[;|&$()`{}[\]<>\\]/;
+const SHELL_METACHARACTERS = /[;|&$()`{}[\]<>]/;
 const MAX_OUTPUT_CHARS = 4000;
 
 const ALLOWED_COMMANDS = new Set([
@@ -30,11 +31,31 @@ const ALLOWED_COMMANDS = new Set([
   "ruby",
 ]);
 
+const KNOWN_NPX_PACKAGES = new Set([
+  "eslint",
+  "prettier",
+  "typescript",
+  "tsx",
+  "vitest",
+  "jest",
+  "mocha",
+  "cypress",
+  "playwright",
+  "knip",
+  "astro",
+  "next",
+  "svelte",
+  "vue-tsc",
+  "tsc",
+]);
+
 export interface PreReviewOutput {
   command: string;
   output: string;
   exitCode: number;
 }
+
+const INTERPRETER_COMMANDS = new Set(["node", "python", "python3", "ruby"]);
 
 export function runPreReviewCommands(cwd: string, commands: string[]): PreReviewOutput[] {
   const results: PreReviewOutput[] = [];
@@ -43,6 +64,12 @@ export function runPreReviewCommands(cwd: string, commands: string[]): PreReview
       const { program, args } = parseCommand(command);
       if (!ALLOWED_COMMANDS.has(program)) {
         throw new Error(`Pre-review command "${program}" is not in the allowlist`);
+      }
+      if (INTERPRETER_COMMANDS.has(program)) {
+        validateInterpreterArgs(program, args, cwd);
+      }
+      if (program === "npx") {
+        validateNpxArgs(args);
       }
       const output = execFileSync(program, args, {
         cwd,
@@ -123,4 +150,34 @@ function tokenize(command: string): string[] {
 function truncateOutput(output: string): string {
   if (output.length <= MAX_OUTPUT_CHARS) return output;
   return output.slice(0, MAX_OUTPUT_CHARS) + "\n… (truncated)";
+}
+
+const FORBIDDEN_INTERPRETER_FLAGS = new Set(["-c", "-e", "--eval", "-exec", "--exec", "-Command", "-EncodedCommand"]);
+
+function validateInterpreterArgs(program: string, args: string[], cwd: string): void {
+  for (const arg of args) {
+    if (FORBIDDEN_INTERPRETER_FLAGS.has(arg)) {
+      throw new Error(`Pre-review ${program} command uses disallowed flag: ${arg}`);
+    }
+  }
+
+  // For node/ruby/python, the first positional argument must be a safe relative script file.
+  const scriptArg = args.find((a) => !a.startsWith("-"));
+  if (scriptArg === undefined) {
+    throw new Error(`Pre-review ${program} command must specify a relative script file`);
+  }
+  if (!resolveProjectPath(cwd, scriptArg)) {
+    throw new Error(`Pre-review ${program} script path is not allowed: ${scriptArg}`);
+  }
+}
+
+function validateNpxArgs(args: string[]): void {
+  const packageArg = args.find((a) => !a.startsWith("-"));
+  if (!packageArg) {
+    throw new Error(`Pre-review npx command must specify a package`);
+  }
+  const packageName = packageArg.split("@")[0];
+  if (!KNOWN_NPX_PACKAGES.has(packageName)) {
+    throw new Error(`Pre-review npx package "${packageName}" is not in the allowlist`);
+  }
 }

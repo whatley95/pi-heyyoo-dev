@@ -49,71 +49,6 @@ const REVIEW_RUBRIC = `Review rubric — check ALL of the following categories:
 
 For each issue found, provide a concrete, actionable fix suggestion. Do NOT suggest fixes that you cannot derive from the code shown.`;
 
-export function buildReviewPrompt(
-  description: string,
-  diff: string,
-  truncated: boolean,
-  vcs?: string,
-  acceptanceCriteria?: string[],
-  sessionContext?: string,
-  conventions?: string,
-  preReviewOutput?: string,
-  memoryContext?: string,
-): { system: string; user: string } {
-  const criteriaBlock = acceptanceCriteria?.length
-    ? `\n\nAcceptance criteria for this step:\n${acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}`
-    : "";
-
-  const sessionBlock = sessionContext
-    ? `\n\n<session_context>\nRecent conversation relevant to this change:\n${sessionContext}\n</session_context>`
-    : "";
-
-  const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
-
-  const preReviewBlock = preReviewOutput ? `\n\n<pre_review_output>\n${preReviewOutput}\n</pre_review_output>` : "";
-
-  const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
-
-  const truncationNotice = truncated
-    ? "\n\n⚠️ NOTE: The diff was truncated because it was too large. Review only what's visible."
-    : "";
-
-  const vcsLine = vcs ? `\n\nVersion control: ${vcs}` : "";
-
-  return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
-
-You are reviewing the latest code change as the developer's pair. Catch bugs, mistakes, and quality issues they missed.
-
-${REVIEW_RUBRIC}
-
-Return ONLY a JSON object with this exact structure — no extra text, no markdown fences:
-{
-  "verdict": "pass" | "needs-work" | "blocked",
-  "issues": [
-    { "severity": "high" | "medium" | "low", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it" }
-  ],
-  "suggestions": ["improvement 1", "improvement 2"],
-  "consensus": true | false
-}
-
-Rules:
-- "verdict" is "pass" only if ALL rubric categories are clean — no issues at any severity
-- "verdict" is "blocked" if the code is fundamentally broken or cannot work as described
-- "verdict" is "needs-work" for anything in between
-- "consensus" is true when verdict is "pass" AND issues is empty
-- Each issue must include a specific, actionable suggestion
-- "file" and "line" are optional but strongly preferred when you can identify the exact location
-- Respect the project conventions shown above; do NOT flag a pattern as wrong if it matches the conventions
-- Pay attention to pre-review command output (lint/test/typecheck). Failures there are real issues.
-- Memory shows past issues in the same files. If a past issue appears again, flag it as regression.
-- CRITICAL: Only flag issues you can see evidence for in the diff. If a property, method, template, or style exists outside the diff, do NOT flag it as missing. When unsure, prefer "pass" or "low" severity over guessing.
-- Be strict but fair — flag real problems, not preferences`,
-
-    user: `Review this code change. The developer says:\n\n${description}${vcsLine}\n\n<diff>\n${diff}\n</diff>${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}`,
-  };
-}
-
 export interface FileContentContext {
   file: string;
   content: string;
@@ -305,6 +240,9 @@ export function buildJudgePrompt(
   planTodo?: string[],
   acceptanceCriteria?: string[],
   reviewHistory?: string,
+  conventions?: string,
+  preReviewOutput?: string,
+  memoryContext?: string,
 ): { system: string; user: string } {
   const planBlock = planTodo?.length
     ? `\n\nOriginal plan:\n${planTodo.map((t, i) => `${i + 1}. ${t}`).join("\n")}`
@@ -317,6 +255,10 @@ export function buildJudgePrompt(
   const historyBlock = reviewHistory
     ? `\n\n<review_history>\nStep-by-step review results:\n${reviewHistory}\n</review_history>`
     : "";
+
+  const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const preReviewBlock = preReviewOutput ? `\n\n<pre_review_output>\n${preReviewOutput}\n</pre_review_output>` : "";
+  const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
 
   return {
     system: `${PAIR_PROGRAMMER_PERSONA}
@@ -347,7 +289,7 @@ Rules:
 - If any plan step is incomplete or unreviewed, that's a medium-severity issue
 - Check the review_history — unreviewed steps are blocking`,
 
-    user: `Judge this completed work:\n\n${description}${planBlock}${criteriaBlock}${historyBlock}`,
+    user: `Judge this completed work:\n\n${description}${planBlock}${criteriaBlock}${historyBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}`,
   };
 }
 

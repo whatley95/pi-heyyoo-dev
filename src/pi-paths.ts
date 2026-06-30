@@ -6,7 +6,8 @@ let configDirNameImpl: string;
 
 try {
   const pi = (await import("@earendil-works/pi-coding-agent")) as Record<string, unknown>;
-  getAgentDirImpl = pi.getAgentDir as () => string;
+  getAgentDirImpl =
+    typeof pi.getAgentDir === "function" ? (pi.getAgentDir as () => string) : () => join(homedir(), ".pi", "agent");
   configDirNameImpl = (pi.CONFIG_DIR_NAME as string) || ".pi";
 } catch {
   getAgentDirImpl = () => join(homedir(), ".pi", "agent");

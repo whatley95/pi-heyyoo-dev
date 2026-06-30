@@ -19,15 +19,18 @@ export function loadState(cwd: string): HeyyooSessionState | null {
   try {
     const raw = readFileSync(path, "utf-8");
     const data = JSON.parse(raw) as Record<string, unknown>;
-    const plan =
-      data.plan && typeof data.plan === "object" && !Array.isArray(data.plan)
-        ? validatePlanResult(data.plan)
-        : undefined;
+    const rawPlan = data.plan && typeof data.plan === "object" && !Array.isArray(data.plan) ? data.plan : undefined;
+    const plan = rawPlan ? validatePlanResult(rawPlan) : undefined;
+    if (rawPlan && !plan) {
+      logEvent(cwd, "warn", "Saved plan failed validation and was ignored", { plan: rawPlan });
+    }
+    const reviewedSteps = Array.isArray(data.reviewedSteps) ? data.reviewedSteps.map((v) => v === true) : [];
     return {
       plan: plan || undefined,
       completedSteps: typeof data.completedSteps === "number" ? data.completedSteps : 0,
       totalSteps: typeof data.totalSteps === "number" ? data.totalSteps : 0,
       reviewRounds: typeof data.reviewRounds === "number" ? data.reviewRounds : 0,
+      reviewedSteps,
     };
   } catch (err) {
     logEvent(cwd, "warn", "Failed to load yoo plan state", { error: err instanceof Error ? err.message : String(err) });
@@ -47,6 +50,7 @@ export function saveState(cwd: string, state: HeyyooSessionState): void {
           completedSteps: state.completedSteps,
           totalSteps: state.totalSteps,
           reviewRounds: state.reviewRounds,
+          reviewedSteps: state.reviewedSteps,
         },
         null,
         2,
