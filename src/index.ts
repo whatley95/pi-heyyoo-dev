@@ -139,17 +139,22 @@ async function executeYooPlan(
   cwd: string,
   task: string,
   signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   if (!config.secondary.provider || !config.secondary.id) {
     return { action: "plan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
+  emitProgress(onUpdate, "plan", "Loading project conventions…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
+  emitProgress(onUpdate, "plan", "Calling secondary model…");
   const { system, user } = buildPlanPrompt(task, conventionsText);
   const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+
+  emitProgress(onUpdate, "plan", "Parsing plan…");
   const parsed = parseJsonResponse(raw);
   const plan = validatePlanResult(parsed);
 
@@ -174,6 +179,7 @@ async function executeYooReview(
     untracked?: boolean;
   } = {},
   signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   if (!config.secondary.provider || !config.secondary.id) {
@@ -181,9 +187,12 @@ async function executeYooReview(
   }
 
   const state = getState(cwd);
+
+  emitProgress(onUpdate, "review", "Collecting diff…");
   const { diff, truncated, changedFiles, vcs } = getDiff(cwd, options);
   const sessionContext = getSessionContext(ctx);
 
+  emitProgress(onUpdate, "review", "Loading project conventions…");
   let conventionsText = "";
   const conventions = loadConventions(cwd);
   if (conventions) {
@@ -192,6 +201,7 @@ async function executeYooReview(
 
   let preReviewOutput = "";
   if (config.preReviewCommands && config.preReviewCommands.length > 0) {
+    emitProgress(onUpdate, "review", "Running pre-review commands…");
     const results = runPreReviewCommands(cwd, config.preReviewCommands);
     preReviewOutput = formatPreReviewOutput(results);
   }
@@ -210,7 +220,10 @@ async function executeYooReview(
     memoryContext,
   );
 
+  emitProgress(onUpdate, "review", "Calling secondary model…");
   const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+
+  emitProgress(onUpdate, "review", "Parsing review…");
   const parsed = parseJsonResponse(raw);
   const review = validateReviewResult(parsed);
   const cost = recordCostWithBudget(cwd, usage);
@@ -230,7 +243,8 @@ async function executeYooReview(
     }
 
     if (config.autoJudge && progress.current === progress.total && progress.total > 0) {
-      const judgeResult = await executeYooJudge(cwd, `All ${progress.total} plan steps completed.`, signal);
+      emitProgress(onUpdate, "review", "Auto-judging completed work…");
+      const judgeResult = await executeYooJudge(cwd, `All ${progress.total} plan steps completed.`, signal, onUpdate);
       if (judgeResult.judge) {
         review.autoJudged = true;
         return { action: "review", review, judge: judgeResult.judge, cost };
@@ -252,17 +266,22 @@ async function executeYooSuggest(
   cwd: string,
   question: string,
   signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   if (!config.secondary.provider || !config.secondary.id) {
     return { action: "suggest", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
+  emitProgress(onUpdate, "suggest", "Loading project conventions…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
   const { system, user } = buildSuggestPrompt(question, conventionsText);
+  emitProgress(onUpdate, "suggest", "Calling secondary model…");
   const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+
+  emitProgress(onUpdate, "suggest", "Parsing suggestions…");
   const parsed = parseJsonResponse(raw);
   const suggest = validateSuggestResult(parsed);
 
@@ -277,6 +296,7 @@ async function executeYooRecommend(
   cwd: string,
   situation: string,
   signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   if (!config.secondary.provider || !config.secondary.id) {
@@ -284,11 +304,16 @@ async function executeYooRecommend(
   }
 
   const state = getState(cwd);
+
+  emitProgress(onUpdate, "recommend", "Loading project conventions…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
   const { system, user } = buildRecommendPrompt(situation, state.plan?.todo, conventionsText);
+  emitProgress(onUpdate, "recommend", "Calling secondary model…");
   const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+
+  emitProgress(onUpdate, "recommend", "Parsing recommendation…");
   const parsed = parseJsonResponse(raw);
   const recommend = validateRecommendResult(parsed);
 
@@ -303,6 +328,7 @@ async function executeYooJudge(
   cwd: string,
   description: string,
   signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   if (!config.secondary.provider || !config.secondary.id) {
@@ -312,7 +338,11 @@ async function executeYooJudge(
   const state = getState(cwd);
   const reviewHistory = buildReviewHistory(cwd);
   const { system, user } = buildJudgePrompt(description, state.plan?.todo, state.plan?.acceptanceCriteria, reviewHistory);
+
+  emitProgress(onUpdate, "judge", "Calling secondary model…");
   const { content: raw, usage } = await callSecondaryModel(config.secondary.provider, config.secondary.id, system, user, signal);
+
+  emitProgress(onUpdate, "judge", "Parsing judgment…");
   const parsed = parseJsonResponse(raw);
   const judge = validateJudgeResult(parsed);
 
@@ -326,15 +356,18 @@ async function executeYooJudge(
 async function executeYooScan(
   cwd: string,
   signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   if (!config.secondary.provider || !config.secondary.id) {
     return { action: "scan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
+  emitProgress(onUpdate, "scan", "Scanning local project conventions…");
   const localScan = scanProjectConventions(cwd);
 
   const { system, user } = buildScanPrompt();
+  emitProgress(onUpdate, "scan", "Calling secondary model…");
   const { content: raw, usage } = await callSecondaryModel(
     config.secondary.provider,
     config.secondary.id,
@@ -344,6 +377,7 @@ async function executeYooScan(
     config.secondary.thinking,
   );
 
+  emitProgress(onUpdate, "scan", "Merging conventions…");
   const parsed = parseJsonResponse(raw);
   const llmConventions = validateConventionsResult(parsed);
   const conventions = llmConventions
@@ -357,6 +391,18 @@ async function executeYooScan(
 function recordCostWithBudget(cwd: string, usage: UsageCost): UsageCost {
   const config = loadHeyyooConfig(cwd);
   return recordCost(cwd, usage, config.costBudgetUsd);
+}
+
+function emitProgress(
+  onUpdate: ((update: unknown) => void) | undefined,
+  action: YooAction,
+  message: string,
+): void {
+  if (!onUpdate) return;
+  onUpdate({
+    content: [{ type: "text", text: message }],
+    details: { action, inProgress: true, progressMessage: message },
+  });
 }
 
 export default function (pi: ExtensionAPI) {
@@ -447,7 +493,7 @@ export default function (pi: ExtensionAPI) {
     renderCall,
     renderResult,
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const p = params as unknown as YooToolParams;
 
       if (!p.plan && !p.review && !p.suggest && !p.recommend && !p.judge && !p.scan) {
@@ -461,7 +507,7 @@ export default function (pi: ExtensionAPI) {
 
       try {
         if (p.plan) {
-          result = await executeYooPlan(ctx.cwd, p.plan, signal);
+          result = await executeYooPlan(ctx.cwd, p.plan, signal, onUpdate);
         } else if (p.review) {
           result = await executeYooReview(ctx.cwd, p.review, ctx, {
             files: p.files,
@@ -470,15 +516,15 @@ export default function (pi: ExtensionAPI) {
             since: p.since,
             vcs: p.vcs,
             untracked: p.untracked,
-          }, signal);
+          }, signal, onUpdate);
         } else if (p.suggest) {
-          result = await executeYooSuggest(ctx.cwd, p.suggest, signal);
+          result = await executeYooSuggest(ctx.cwd, p.suggest, signal, onUpdate);
         } else if (p.recommend) {
-          result = await executeYooRecommend(ctx.cwd, p.recommend, signal);
+          result = await executeYooRecommend(ctx.cwd, p.recommend, signal, onUpdate);
         } else if (p.judge) {
-          result = await executeYooJudge(ctx.cwd, p.judge, signal);
+          result = await executeYooJudge(ctx.cwd, p.judge, signal, onUpdate);
         } else if (p.scan) {
-          result = await executeYooScan(ctx.cwd, signal);
+          result = await executeYooScan(ctx.cwd, signal, onUpdate);
         } else {
           result = { action: "plan", error: "Unknown action" };
         }

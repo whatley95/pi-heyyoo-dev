@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import type { Conventions, ScanResult } from "./types.js";
 
 function getConventionsPath(cwd: string): string {
@@ -83,6 +83,9 @@ export function scanProjectConventions(cwd: string): ScanResult {
   return { conventions, files };
 }
 
+const FALLBACK_SCAN_LIMIT = 500;
+const EXCLUDED_SCAN_DIRS = new Set(["node_modules", ".pi", ".git", "dist", "build", "out", "coverage"]);
+
 function listTrackedFiles(cwd: string): string[] {
   try {
     return execSync("git ls-files", { cwd, encoding: "utf-8", maxBuffer: 1024 * 1024, timeout: 10000 })
@@ -90,20 +93,31 @@ function listTrackedFiles(cwd: string): string[] {
       .filter((f) => f.length > 0 && !f.includes("node_modules/") && !f.includes(".pi/"));
   } catch { /* not a git repo */ }
 
-  // fallback: shallow directory scan
+  // fallback: portable recursive directory scan (works on Windows without Unix shell tools)
   try {
-    return execSync("find . -type f -not -path './node_modules/*' -not -path './.pi/*' -not -path './.git/*' | head -n 500", {
-      cwd,
-      encoding: "utf-8",
-      maxBuffer: 1024 * 1024,
-      timeout: 10000,
-    })
-      .split(/\r?\n/)
-      .map((f) => f.replace(/^\.\//, ""))
-      .filter((f) => f.length > 0);
+    return scanDirectory(cwd, cwd, FALLBACK_SCAN_LIMIT);
   } catch { /* ignore */ }
 
   return [];
+}
+
+function scanDirectory(root: string, dir: string, limit: number): string[] {
+  const files: string[] = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (files.length >= limit) break;
+    if (entry.isDirectory()) {
+      if (!EXCLUDED_SCAN_DIRS.has(entry.name)) {
+        files.push(...scanDirectory(root, join(dir, entry.name), limit - files.length));
+      }
+      continue;
+    }
+    if (entry.isFile()) {
+      const rel = relative(root, join(dir, entry.name)).split("\\").join("/");
+      files.push(rel);
+    }
+  }
+  return files;
 }
 
 function readPackageJson(cwd: string): Record<string, unknown> | null {

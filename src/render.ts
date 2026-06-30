@@ -59,13 +59,24 @@ export function renderCall(params: unknown, theme: Theme, context?: ToolRenderCo
   return text;
 }
 
-export function renderResult(result: unknown, _opts: { expanded: boolean }, theme: Theme, context?: ToolRenderContext): Text {
+export function renderResult(
+  result: unknown,
+  opts: { expanded: boolean; isPartial?: boolean },
+  theme: Theme,
+  context?: ToolRenderContext,
+): Text {
   const { result: r, isError } = resolveToolResult(result);
   const text = getTextComponent(context);
 
   if (!r || r.error || isError) {
     const message = r?.error ? `yoo error: ${r.error}` : "yoo error";
     text.setText(theme.fg("error", message));
+    return text;
+  }
+
+  if (r.inProgress || opts.isPartial) {
+    const message = r.progressMessage || "yoo is thinking…";
+    text.setText(theme.fg("dim", message));
     return text;
   }
 
