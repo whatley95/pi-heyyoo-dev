@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const MAX_DIFF_CHARS = 6000;
 
@@ -28,9 +30,9 @@ export function getVcsInfo(cwd: string): VcsInfo {
 
 function getGitInfo(cwd: string): VcsInfo {
   try {
-    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf-8", timeout: 3000 }).trim();
-    const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf-8", timeout: 3000 }).trim();
-    const status = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf-8", timeout: 3000 }).trim();
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] }).trim();
     return { type: "git", branch, revision, dirty: status.length > 0 };
   } catch (err) {
     return { type: "git", error: err instanceof Error ? err.message : String(err) };
@@ -39,7 +41,7 @@ function getGitInfo(cwd: string): VcsInfo {
 
 function getSvnInfo(cwd: string): VcsInfo {
   try {
-    const output = execFileSync("svn", ["info"], { cwd, encoding: "utf-8", timeout: 5000 });
+    const output = execFileSync("svn", ["info"], { cwd, encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] });
     const revision = output.match(/^Revision:\s*(.+)$/m)?.[1]?.trim();
     const url = output.match(/^URL:\s*(.+)$/m)?.[1]?.trim();
     return { type: "svn", revision, branch: url };
@@ -212,13 +214,17 @@ function extractChangedFiles(diff: string, vcs: VcsType): string[] {
 }
 
 function detectVcs(cwd: string): VcsType {
+  if (existsSync(join(cwd, ".git"))) return "git";
+  if (existsSync(join(cwd, ".svn"))) return "svn";
+
+  // Fallback to command probes for non-standard layouts.
   try {
-    execFileSync("git", ["rev-parse", "--git-dir"], { cwd, encoding: "utf-8", timeout: 3000 });
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
     return "git";
   } catch { /* ignore */ }
 
   try {
-    execFileSync("svn", ["info"], { cwd, encoding: "utf-8", timeout: 3000 });
+    execFileSync("svn", ["info"], { cwd, encoding: "utf-8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] });
     return "svn";
   } catch { /* ignore */ }
 
