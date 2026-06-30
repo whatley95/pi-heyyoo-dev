@@ -245,22 +245,31 @@ function inferPatterns(files: string[], cwd: string): string[] {
   if (files.some((f) => f.includes(".github/"))) patterns.push("uses GitHub Actions/Workflows");
   if (files.some((f) => f === "docker-compose.yml" || f === "Dockerfile")) patterns.push("uses Docker");
   if (files.some((f) => f === ".env.example" || f === ".env.local.example")) patterns.push("has env example files");
+  if (files.some((f) => f === "pubspec.yaml")) patterns.push("Flutter project (pubspec.yaml)");
+  if (files.some((f) => f === "pom.xml" || f === "build.gradle" || f === "build.gradle.kts")) patterns.push("JVM project (Maven/Gradle)");
+  if (files.some((f) => f.endsWith(".component.ts"))) patterns.push("Angular component files");
+  if (files.some((f) => f.endsWith(".vue"))) patterns.push("Vue single-file components");
+  if (files.some((f) => f === "vite.config.ts" || f === "vite.config.js")) patterns.push("Vite project");
   return patterns;
 }
 
 function inferStack(files: string[], cwd: string, pkg: Record<string, unknown> | null): string {
-  if (!pkg) return "unknown";
   const checks: Record<string, boolean> = {
     TypeScript: files.some((f) => /\.(ts|tsx)$/.test(f)),
     React: files.some((f) => /\.(tsx|jsx)$/.test(f)) || hasDependency(pkg, "react"),
     "Next.js": hasDependency(pkg, "next"),
-    Vue: hasDependency(pkg, "vue"),
+    Vue: files.some((f) => f.endsWith(".vue")) || hasDependency(pkg, "vue"),
+    Angular: hasDependency(pkg, "@angular/core") || files.some((f) => f.endsWith(".component.ts")),
     Svelte: hasDependency(pkg, "svelte"),
+    Vite: hasDependency(pkg, "vite") || files.some((f) => f === "vite.config.ts" || f === "vite.config.js"),
     Node: existsSync(join(cwd, "package.json")),
     Python: files.some((f) => f.endsWith(".py")),
     Go: files.some((f) => f.endsWith(".go")),
     Rust: files.some((f) => f.endsWith(".rs")),
     Java: files.some((f) => f.endsWith(".java")),
+    "Spring Boot": hasDependency(pkg, "spring-boot-starter") || (files.some((f) => f === "pom.xml" || f === "build.gradle" || f === "build.gradle.kts") && files.some((f) => f.endsWith(".java"))),
+    Flutter: files.some((f) => f === "pubspec.yaml") && files.some((f) => f.endsWith(".dart")),
+    Dart: files.some((f) => f.endsWith(".dart")),
   };
   const detected = Object.entries(checks).filter(([, v]) => v).map(([k]) => k);
   return detected.length > 0 ? detected.join(", ") : "unknown";
@@ -272,6 +281,9 @@ function inferTesting(files: string[], pkg: Record<string, unknown> | null): str
   if (hasDependency(pkg, "mocha")) return "mocha";
   if (hasDependency(pkg, "playwright")) return "playwright";
   if (hasDependency(pkg, "cypress")) return "cypress";
+  if (hasDependency(pkg, "@angular/core")) return "karma / jasmine (angular default)";
+  if (files.some((f) => f === "pubspec.yaml") && files.some((f) => /\/(test|integration_test)\//.test(f) && f.endsWith(".dart"))) return "flutter test";
+  if (files.some((f) => f.endsWith("Test.java") || f.endsWith("Tests.java"))) return "junit";
   if (files.some((f) => /\.(test|spec)\./.test(f))) return "unknown test files";
   return undefined;
 }
@@ -292,8 +304,9 @@ function inferUi(files: string[], pkg: Record<string, unknown> | null): string |
   if (hasDependency(pkg, "react")) return "react";
   if (hasDependency(pkg, "vue")) return "vue";
   if (hasDependency(pkg, "svelte")) return "svelte";
-  if (hasDependency(pkg, "angular")) return "angular";
+  if (hasDependency(pkg, "@angular/core")) return "angular";
   if (hasDependency(pkg, "solid-js")) return "solid";
+  if (files.some((f) => f === "pubspec.yaml") && files.some((f) => f.endsWith(".dart"))) return "flutter";
   return undefined;
 }
 
@@ -320,6 +333,8 @@ function inferBuildTool(files: string[], pkg: Record<string, unknown> | null): s
   if (files.some((f) => f === "webpack.config.js")) return "webpack";
   if (files.some((f) => f === "rollup.config.js")) return "rollup";
   if (files.some((f) => f === "tsup.config.ts")) return "tsup";
+  if (files.some((f) => f === "build.gradle" || f === "build.gradle.kts")) return "gradle";
+  if (files.some((f) => f === "pom.xml")) return "maven";
   return undefined;
 }
 
@@ -340,6 +355,7 @@ function inferPackageManager(cwd: string): string | undefined {
   if (existsSync(join(cwd, "Cargo.lock"))) return "cargo";
   if (existsSync(join(cwd, "poetry.lock"))) return "poetry";
   if (existsSync(join(cwd, "Pipfile.lock"))) return "pipenv";
+  if (existsSync(join(cwd, "pubspec.yaml"))) return "pub";
   return undefined;
 }
 
@@ -369,7 +385,7 @@ function inferScripts(pkg: Record<string, unknown> | null): string[] {
 }
 
 function inferStyleSample(files: string[], cwd: string): string | undefined {
-  const candidates = files.filter((f) => /\.(ts|js|tsx|jsx|py|go|rs)$/.test(f) && !/\.(test|spec|d)\./.test(f));
+  const candidates = files.filter((f) => /\.(ts|js|tsx|jsx|py|go|rs|dart|java)$/.test(f) && !/\.(test|spec|d)\./.test(f));
   if (candidates.length === 0) return undefined;
 
   // pick a medium-sized representative file
