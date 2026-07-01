@@ -500,6 +500,7 @@ async function executeYooRecommend(
     const validationErrors = parsed ? getRecommendValidationErrors(parsed) : [];
     logEvent(cwd, "warn", "Failed to parse recommendation from secondary model response", {
       raw: raw.slice(0, 2000),
+      parsed: parsed === null ? null : typeof parsed,
       parseError,
       validationErrors,
     });
