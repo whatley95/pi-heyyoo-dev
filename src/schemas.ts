@@ -56,16 +56,14 @@ export const RecommendResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const JudgeResultSchema = Type.Intersect(
-  [
-    ReviewResultSchema,
-    Type.Object(
-      {
-        summary: Type.String(),
-      },
-      { additionalProperties: false },
-    ),
-  ],
+export const JudgeResultSchema = Type.Object(
+  {
+    verdict: Type.Union([Type.Literal("pass"), Type.Literal("needs-work"), Type.Literal("blocked")]),
+    issues: Type.Array(ReviewIssueSchema),
+    suggestions: Type.Array(Type.String()),
+    consensus: Type.Boolean(),
+    summary: Type.String(),
+  },
   { additionalProperties: false },
 );
 
