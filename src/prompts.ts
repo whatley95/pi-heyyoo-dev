@@ -294,7 +294,8 @@ Rules:
 }
 
 export function parseJsonResponse<T>(text: string): T | null {
-  const cleaned = text.trim();
+  // Strip BOM and normalize line endings.
+  const cleaned = text.replace(/^\uFEFF/, "").trim();
 
   // Try the whole text first.
   try {
@@ -325,7 +326,7 @@ export function parseJsonResponse<T>(text: string): T | null {
     }
   }
 
-  // Find the largest balanced JSON object in the text.
+  // Find the largest balanced JSON object in the text, respecting strings.
   const json = extractLargestJsonObject(cleaned);
   if (json) {
     try {
@@ -342,9 +343,23 @@ function extractLargestJsonObject(text: string): string | null {
   let best: string | null = null;
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escape = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (ch === "{") {
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
       if (depth === 0) start = i;
       depth++;
     } else if (ch === "}") {
