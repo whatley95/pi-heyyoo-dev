@@ -25,7 +25,10 @@ import {
   validateJudgeResult,
   validateConventionsResult,
   getJsonParseError,
+  getReviewValidationErrors,
+  getSuggestValidationErrors,
   getRecommendValidationErrors,
+  getJudgeValidationErrors,
 } from "./prompts.js";
 import { calculateReviewBudget, estimateTokens } from "./token-budget.js";
 import { loadFileContentsForReview, isReviewableFile } from "./file-loader.js";
@@ -356,7 +359,12 @@ async function executeYooReview(
   const cost = recordCostWithBudget(cwd, usage);
 
   if (!review) {
-    logEvent(cwd, "warn", "Failed to parse review from secondary model response", { raw: raw.slice(0, 2000) });
+    logEvent(cwd, "warn", "Failed to parse review from secondary model response", {
+      raw: raw.slice(0, 2000),
+      parsed: parsed === null ? null : typeof parsed,
+      parseError: getJsonParseError(raw),
+      validationErrors: parsed ? getReviewValidationErrors(parsed) : [],
+    });
     return {
       action: "review",
       error: "Failed to parse review from secondary model response.",
@@ -451,7 +459,12 @@ async function executeYooSuggest(
   const suggest = validateSuggestResult(parsed);
 
   if (!suggest) {
-    logEvent(cwd, "warn", "Failed to parse suggestions from secondary model response", { raw: raw.slice(0, 2000) });
+    logEvent(cwd, "warn", "Failed to parse suggestions from secondary model response", {
+      raw: raw.slice(0, 2000),
+      parsed: parsed === null ? null : typeof parsed,
+      parseError: getJsonParseError(raw),
+      validationErrors: parsed ? getSuggestValidationErrors(parsed) : [],
+    });
     return {
       action: "suggest",
       error: "Failed to parse suggestions from secondary model response.",
@@ -559,7 +572,12 @@ async function executeYooJudge(
   const judge = validateJudgeResult(parsed);
 
   if (!judge) {
-    logEvent(cwd, "warn", "Failed to parse judgment from secondary model response", { raw: raw.slice(0, 2000) });
+    logEvent(cwd, "warn", "Failed to parse judgment from secondary model response", {
+      raw: raw.slice(0, 2000),
+      parsed: parsed === null ? null : typeof parsed,
+      parseError: getJsonParseError(raw),
+      validationErrors: parsed ? getJudgeValidationErrors(parsed) : [],
+    });
     return {
       action: "judge",
       error: "Failed to parse judgment from secondary model response.",

@@ -434,10 +434,33 @@ export function getJsonParseError(text: string): string | null {
   }
 }
 
-export function getRecommendValidationErrors(data: unknown): Array<{ path: string; message: string; value: unknown }> {
-  return [...Value.Errors(RecommendResultSchema, data)].map((e) => ({
+function formatValidationErrors(
+  schema: Parameters<typeof Value.Errors>[0],
+  data: unknown,
+): Array<{ path: string; message: string; value: unknown }> {
+  return [...Value.Errors(schema, data)].map((e) => ({
     path: e.path,
     message: e.message,
     value: e.value,
   }));
+}
+
+export function getReviewValidationErrors(data: unknown): Array<{ path: string; message: string; value: unknown }> {
+  return formatValidationErrors(ReviewResultSchema, data);
+}
+
+export function getSuggestValidationErrors(data: unknown): Array<{ path: string; message: string; value: unknown }> {
+  return formatValidationErrors(SuggestResultSchema, data);
+}
+
+export function getRecommendValidationErrors(data: unknown): Array<{ path: string; message: string; value: unknown }> {
+  return formatValidationErrors(RecommendResultSchema, data);
+}
+
+export function getJudgeValidationErrors(data: unknown): Array<{ path: string; message: string; value: unknown }> {
+  return formatValidationErrors(JudgeResultSchema, data);
+}
+
+export function getPlanValidationErrors(data: unknown): Array<{ path: string; message: string; value: unknown }> {
+  return formatValidationErrors(PlanResultSchema, data);
 }
