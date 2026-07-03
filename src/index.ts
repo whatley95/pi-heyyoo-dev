@@ -1379,6 +1379,92 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("yoo log cleared.", "info");
     },
   });
+
+  pi.registerCommand("yoo-test", {
+    description: "Test connectivity to the configured secondary model",
+    handler: async (_args, ctx) => {
+      const config = loadHeyyooConfig(ctx.cwd);
+      if (!config.secondary.provider || !config.secondary.id) {
+        ctx.ui.notify("No secondary model configured. Run /yoo-config or /yoo-model first.", "warn");
+        return;
+      }
+
+      const label = secondaryModelLabel(config);
+      const progress = createProgressReporter("scan", ctx);
+      const notifyProgress: ProgressReporter = (stage, total, message) => {
+        progress(stage, total, message);
+        ctx.ui.notify(`[${stage}/${total}] ${message}`, "info");
+      };
+
+      notifyProgress(1, 3, `Testing ${label}…`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+
+      try {
+        const { content, usage } = await callSecondaryModel(
+          config.secondary.provider,
+          config.secondary.id,
+          "You are a helpful assistant. Reply with exactly: yoo connection OK",
+          "Test connection. Reply with exactly: yoo connection OK",
+          controller.signal,
+          config.secondary.thinking,
+          ctx.cwd,
+        );
+        clearTimeout(timeout);
+        notifyProgress(2, 3, "Got response from secondary model");
+        const response = content.trim();
+        const costText = usage
+          ? ` (${formatTokenCount(usage.estimatedInputTokens)} in · ${formatTokenCount(usage.estimatedOutputTokens)} out · ${formatCost(usage.estimatedCostUsd)})`
+          : "";
+        if (response.toLowerCase().includes("yoo connection ok") || response.toLowerCase().includes("connection ok")) {
+          notifyProgress(3, 3, "Connection verified");
+          ctx.ui.notify(`yoo-test OK: ${label} is reachable${costText}`, "info");
+        } else {
+          notifyProgress(3, 3, "Unexpected response");
+          ctx.ui.notify(`yoo-test warning: ${label} replied but content was unexpected: "${response.slice(0, 100)}"${costText}`, "warn");
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        const message = err instanceof Error ? err.message : String(err);
+        logEvent(ctx.cwd, "error", "yoo-test failed", {
+          provider: config.secondary.provider,
+          model: config.secondary.id,
+          error: message,
+        });
+        notifyProgress(3, 3, "Connection failed");
+        ctx.ui.notify(`yoo-test failed for ${label}: ${message}`, "error");
+      } finally {
+        clearYooStatus(ctx);
+      }
+    },
+  });
+
+  pi.registerCommand("yoo-scan", {
+    description: "Alias for /yoo scan — scan project conventions",
+    handler: async (_args, ctx) => {
+      const signal = undefined;
+      const progress = createProgressReporter("scan", ctx);
+      const notifyProgress: ProgressReporter = (stage, total, message) => {
+        progress(stage, total, message);
+        ctx.ui.notify(`[${stage}/${total}] ${message}`, "info");
+      };
+
+      let result: YooToolResult;
+      try {
+        result = await executeYooScan(ctx.cwd, signal, notifyProgress);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logEvent(ctx.cwd, "error", "yoo-scan command failed", { error: message });
+        ctx.ui.notify(`yoo-scan error: ${message}`, "error");
+        return;
+      } finally {
+        clearYooStatus(ctx);
+      }
+
+      const text = formatResultText(result);
+      ctx.ui.notify(text.slice(0, 500), result.error ? "error" : "info");
+    },
+  });
 }
 
 async function showYooStatus(ctx: ExtensionContext): Promise<void> {

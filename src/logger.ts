@@ -63,7 +63,8 @@ export function readRecentLogs(cwd: string, limit = 100): string[] {
     return content
       .split("\n")
       .filter((line) => line.trim().length > 0)
-      .slice(-limit);
+      .slice(-limit)
+      .reverse();
   } catch {
     return [];
   }
