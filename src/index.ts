@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "./pi-paths.js";
 import { loadHeyyooConfig } from "./config.js";
-import { callSecondaryModel } from "./secondary-model.js";
+import { callSecondaryModel, setPiSessionId, clearPiSessionId } from "./secondary-model.js";
 import { getDiff, getVcsInfo } from "./diff-grabber.js";
 
 const { version: VERSION, homepage: HOMEPAGE = "https://whatley.xyz" } = JSON.parse(
@@ -881,11 +881,18 @@ export default function (pi: ExtensionAPI) {
     }
     // cost.json tracks estimated spend for the current Pi session.
     resetCost(ctx.cwd);
+    // Make OpenCode session-aware so it can use sticky provider routing.
+    try {
+      setPiSessionId(ctx.cwd, ctx.sessionManager.getSessionId());
+    } catch {
+      /* ignore if sessionManager is unavailable */
+    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     sessionStates.delete(ctx.cwd);
     loopStates.delete(ctx.cwd);
+    clearPiSessionId(ctx.cwd);
   });
 
   pi.on("tool_execution_start", async (event, ctx) => {

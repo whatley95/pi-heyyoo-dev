@@ -110,6 +110,16 @@ function resolveProviderApiInfo(
   return getProviderApiInfo(provider);
 }
 
+const piSessionIds = new Map<string, string>();
+
+export function setPiSessionId(cwd: string, sessionId: string): void {
+  piSessionIds.set(cwd, sessionId);
+}
+
+export function clearPiSessionId(cwd: string): void {
+  piSessionIds.delete(cwd);
+}
+
 export async function callSecondaryModel(
   provider: string,
   model: string,
@@ -157,6 +167,8 @@ export async function callSecondaryModel(
     }
   }
 
+  const sessionId = cwd ? piSessionIds.get(cwd) : undefined;
+
   try {
     if (apiInfo.style === "anthropic") {
       return await callAnthropicApi(
@@ -182,6 +194,8 @@ export async function callSecondaryModel(
       thinking,
       false,
       modelInfoOverride,
+      cwd,
+      sessionId,
     );
   } catch (err) {
     if (cwd) {
@@ -347,6 +361,8 @@ async function callOpenAiCompatibleApi(
   thinking?: string,
   retriedWithReasoningOff = false,
   modelInfoOverride?: Partial<import("./model-registry.js").ModelInfo>,
+  cwd?: string,
+  sessionId?: string,
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = buildOpenAiUrl(apiInfo, apiKey);
 
@@ -382,6 +398,9 @@ async function callOpenAiCompatibleApi(
   }
 
   const headers = buildOpenAiHeaders(apiInfo, apiKey);
+  if ((provider === "opencode-go" || provider === "opencode") && sessionId) {
+    headers["x-opencode-session"] = sessionId;
+  }
 
   const response = await fetchWithRetry(url, {
     method: "POST",
@@ -449,6 +468,8 @@ async function callOpenAiCompatibleApi(
       "off",
       true,
       modelInfoOverride,
+      cwd,
+      sessionId,
     );
   }
 

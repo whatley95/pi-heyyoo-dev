@@ -47,6 +47,7 @@ declare module "@earendil-works/pi-coding-agent" {
       getHeader(): unknown;
       getBranch(): unknown[];
       getEntries(): unknown[];
+      getSessionId(): string;
     };
     ui: {
       theme: {
