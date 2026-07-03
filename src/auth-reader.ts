@@ -19,7 +19,11 @@ const ALLOWED_COMMANDS = new Set([
   "echo",
 ]);
 
-export function resolveApiKey(provider: string): string | undefined {
+export function resolveApiKey(provider: string, configKey?: string): string | undefined {
+  if (configKey) {
+    return resolveKeyValue(configKey);
+  }
+
   const authPath = join(getAgentDir(), "auth.json");
   if (existsSync(authPath)) {
     try {

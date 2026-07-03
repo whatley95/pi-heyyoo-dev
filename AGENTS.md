@@ -191,17 +191,43 @@ Relevant keys:
 
 - `secondary.provider` / `secondary.id` — required; determines which model answers.
 - `secondary.thinking` — optional reasoning budget (`off` → `xhigh`).
+- `secondary.baseUrl` — optional custom endpoint for any OpenAI-compatible or Anthropic-compatible provider.
+- `secondary.apiKey` — optional inline API key (prefer `auth.json` or env vars).
+- `secondary.style` — `"openai-compatible"` (default) or `"anthropic"`; used only with `baseUrl`.
+- `secondary.authHeader` / `secondary.authPrefix` — optional auth header overrides; used only with `baseUrl`.
+- `secondary.contextWindow` / `secondary.maxOutputTokens` — optional overrides for the current model.
+- `modelInfo` — optional per-model token budget overrides, keyed by model id.
 - `autoJudge` — run `judge` automatically when the last plan step passes review.
 - `preReviewCommands` — shell commands run before each review; output is included in the prompt. Interpreter commands (`node`, `npx`, `python`, `python3`, `ruby`) are restricted to relative script files; inline-evaluation flags (`-c`, `-e`, `--eval`, etc.) are rejected.
 - `costBudgetUsd` — hard cap on estimated spend for the current Pi session. Negative values are treated as unset; `0` means no spend is allowed. `cost.json` is reset at the start of each Pi session and can also be cleared with `/yoo-clear`.
+
+When `secondary.baseUrl` is set, the hardcoded provider map is bypassed and the configured endpoint is used directly. This makes the extension provider-universal. `modelInfo` makes the model registry user-configurable, so unknown models don't require code changes.
+
+Example:
+
+```json
+{
+  "pi-heyyoo": {
+    "secondary": {
+      "provider": "opencode-custom",
+      "id": "qwen3.7-max",
+      "baseUrl": "https://your.opencode.endpoint/v1"
+    },
+    "modelInfo": {
+      "qwen3.7-max": { "contextWindow": 128000, "maxOutputTokens": 8192 }
+    }
+  }
+}
+```
 
 ### Authentication
 
 API keys are resolved by `src/auth-reader.ts` in order:
 
-1. `~/.pi/agent/auth.json` entry for the provider (`{ "type": "api_key", "key": "..." }`).
-2. Environment variable mapped to the provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
-3. Indirection supported: `"key": "!command"`, `"key": "$ENV"`, `"key": "${ENV}"`.
+1. `pi-heyyoo.secondary.apiKey` in settings (if set).
+2. `~/.pi/agent/auth.json` entry for the provider (`{ "type": "api_key", "key": "..." }`).
+3. Environment variable mapped to the provider (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
+4. Indirection supported: `"key": "!command"`, `"key": "$ENV"`, `"key": "${ENV}"`.
 
 ### Runtime data
 

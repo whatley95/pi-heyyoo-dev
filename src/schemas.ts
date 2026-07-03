@@ -12,7 +12,7 @@ export const PlanResultSchema = Type.Object(
 export const ReviewIssueSchema = Type.Object(
   {
     severity: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
-    file: Type.Optional(Type.String()),
+    file: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     line: Type.Optional(Type.Union([Type.Number(), Type.Null(), Type.String()])),
     issue: Type.String(),
     suggestion: Type.String(),

@@ -35,6 +35,19 @@ const KNOWN_MODELS: Record<string, ModelInfo> = {
   "deepseek-v4-flash": { contextWindow: 64_000, maxOutputTokens: 16_384 },
   "deepseek-v3": { contextWindow: 64_000, maxOutputTokens: 8192 },
 
+  // OpenCode Go
+  "glm-5.2": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "glm-5.1": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "kimi-k2.7-code": { contextWindow: 256_000, maxOutputTokens: 16_384 },
+  "kimi-k2.6": { contextWindow: 256_000, maxOutputTokens: 16_384 },
+  "mimo-v2.5-pro": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "mimo-v2.5": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "qwen3.7-max": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "qwen3.7-plus": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "qwen3.6-plus": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "minimax-m2.7": { contextWindow: 128_000, maxOutputTokens: 8192 },
+  "minimax-m3": { contextWindow: 128_000, maxOutputTokens: 8192 },
+
   // Google
   "gemini-1.5-pro": { contextWindow: 2_000_000, maxOutputTokens: 8192 },
   "gemini-1.5-flash": { contextWindow: 1_000_000, maxOutputTokens: 8192 },

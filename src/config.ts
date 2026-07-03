@@ -56,6 +56,28 @@ function normalizeCostBudgetUsd(value: unknown, fallback: number | undefined): n
   return value;
 }
 
+function mergeModelInfo(base: HeyyooConfig["modelInfo"], override: unknown): HeyyooConfig["modelInfo"] {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return base;
+  }
+  const result: NonNullable<HeyyooConfig["modelInfo"]> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const v = value as Record<string, unknown>;
+    const entry: { contextWindow?: number; maxOutputTokens?: number } = {};
+    if (typeof v.contextWindow === "number" && Number.isFinite(v.contextWindow)) {
+      entry.contextWindow = v.contextWindow;
+    }
+    if (typeof v.maxOutputTokens === "number" && Number.isFinite(v.maxOutputTokens)) {
+      entry.maxOutputTokens = v.maxOutputTokens;
+    }
+    if (Object.keys(entry).length > 0) {
+      result[key] = entry;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
   if (!override || typeof override !== "object" || Array.isArray(override)) {
     return base;
@@ -70,6 +92,11 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
         typeof o.secondary?.contextWindow === "number" ? o.secondary.contextWindow : base.secondary.contextWindow,
       maxOutputTokens:
         typeof o.secondary?.maxOutputTokens === "number" ? o.secondary.maxOutputTokens : base.secondary.maxOutputTokens,
+      baseUrl: o.secondary?.baseUrl || base.secondary.baseUrl,
+      apiKey: o.secondary?.apiKey || base.secondary.apiKey,
+      style: o.secondary?.style || base.secondary.style,
+      authHeader: o.secondary?.authHeader || base.secondary.authHeader,
+      authPrefix: o.secondary?.authPrefix || base.secondary.authPrefix,
     },
     autoJudge: typeof o.autoJudge === "boolean" ? o.autoJudge : base.autoJudge,
     preReviewCommands: Array.isArray(o.preReviewCommands)
@@ -87,5 +114,6 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
       ? o.reviewStrategy
       : base.reviewStrategy,
     verifyByDefault: typeof o.verifyByDefault === "boolean" ? o.verifyByDefault : base.verifyByDefault,
+    modelInfo: mergeModelInfo(base.modelInfo, o.modelInfo),
   };
 }

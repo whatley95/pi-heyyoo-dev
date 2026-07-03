@@ -368,22 +368,45 @@ async function executeYooReview(
 
   progress(9, STAGES.review, "Parsing review…");
   const parsed = parseJsonResponse(raw);
-  const review = validateReviewResult(parsed);
-  const cost = recordCostWithBudget(cwd, usage);
+  let review = validateReviewResult(parsed);
+  let cost = recordCostWithBudget(cwd, usage);
 
   if (!review) {
-    logEvent(cwd, "warn", "Failed to parse review from secondary model response", {
+    logEvent(cwd, "warn", "Failed to parse review from secondary model response, retrying with reasoning off", {
       raw: raw.slice(0, 2000),
       parsed: parsed === null ? null : typeof parsed,
       parseError: getJsonParseError(raw),
       validationErrors: parsed ? getReviewValidationErrors(parsed) : [],
     });
-    return {
-      action: "review",
-      error: "Failed to parse review from secondary model response.",
-      review: { verdict: "needs-work", issues: [], suggestions: [], consensus: false },
-      cost,
-    };
+    progress(9, STAGES.review, "Parsing failed, retrying with reasoning off…");
+    const { content: rawRetry, usage: usageRetry } = await callSecondaryModel(
+      config.secondary.provider,
+      config.secondary.id,
+      system,
+      `${user}\n\nCRITICAL: Your previous response could not be parsed. Return ONLY valid JSON matching the required structure, with no markdown fences, no explanations, and no extra text.`,
+      signal,
+      "off",
+      cwd,
+    );
+    const parsedRetry = parseJsonResponse(rawRetry);
+    const reviewRetry = validateReviewResult(parsedRetry);
+    if (reviewRetry) {
+      review = reviewRetry;
+      cost = mergeUsageCost(cost, recordCostWithBudget(cwd, usageRetry));
+    } else {
+      logEvent(cwd, "warn", "Failed to parse review from secondary model response after retry", {
+        raw: rawRetry.slice(0, 2000),
+        parsed: parsedRetry === null ? null : typeof parsedRetry,
+        parseError: getJsonParseError(rawRetry),
+        validationErrors: parsedRetry ? getReviewValidationErrors(parsedRetry) : [],
+      });
+      return {
+        action: "review",
+        error: "Failed to parse review from secondary model response.",
+        review: { verdict: "needs-work", issues: [], suggestions: [], consensus: false },
+        cost,
+      };
+    }
   }
 
   progress(10, STAGES.review, "Recording issues…");
@@ -582,23 +605,47 @@ async function executeYooJudge(
 
   progress(3, STAGES.judge, "Parsing judgment…");
   const parsed = parseJsonResponse(raw);
-  const judge = validateJudgeResult(parsed);
+  let judge = validateJudgeResult(parsed);
+  let cost = recordCostWithBudget(cwd, usage);
 
   if (!judge) {
-    logEvent(cwd, "warn", "Failed to parse judgment from secondary model response", {
+    logEvent(cwd, "warn", "Failed to parse judgment from secondary model response, retrying with reasoning off", {
       raw: raw.slice(0, 2000),
       parsed: parsed === null ? null : typeof parsed,
       parseError: getJsonParseError(raw),
       validationErrors: parsed ? getJudgeValidationErrors(parsed) : [],
     });
-    return {
-      action: "judge",
-      error: "Failed to parse judgment from secondary model response.",
-      cost: recordCostWithBudget(cwd, usage),
-    };
+    progress(3, STAGES.judge, "Parsing failed, retrying with reasoning off…");
+    const { content: rawRetry, usage: usageRetry } = await callSecondaryModel(
+      config.secondary.provider,
+      config.secondary.id,
+      system,
+      `${user}\n\nCRITICAL: Your previous response could not be parsed. Return ONLY valid JSON matching the required structure, with no markdown fences, no explanations, and no extra text.`,
+      signal,
+      "off",
+      cwd,
+    );
+    const parsedRetry = parseJsonResponse(rawRetry);
+    const judgeRetry = validateJudgeResult(parsedRetry);
+    if (judgeRetry) {
+      judge = judgeRetry;
+      cost = mergeUsageCost(cost, recordCostWithBudget(cwd, usageRetry));
+    } else {
+      logEvent(cwd, "warn", "Failed to parse judgment from secondary model response after retry", {
+        raw: rawRetry.slice(0, 2000),
+        parsed: parsedRetry === null ? null : typeof parsedRetry,
+        parseError: getJsonParseError(rawRetry),
+        validationErrors: parsedRetry ? getJudgeValidationErrors(parsedRetry) : [],
+      });
+      return {
+        action: "judge",
+        error: "Failed to parse judgment from secondary model response.",
+        cost,
+      };
+    }
   }
 
-  return { action: "judge", judge, cost: recordCostWithBudget(cwd, usage) };
+  return { action: "judge", judge, cost };
 }
 
 async function executeYooScan(
@@ -715,7 +762,8 @@ function validateYooToolParams(params: unknown): ValidationResult {
   const stringArray = (value: unknown): string[] | undefined => {
     if (value === undefined) return undefined;
     if (!Array.isArray(value)) return undefined;
-    return value.filter((v): v is string => typeof v === "string" && v.length > 0);
+    const filtered = value.filter((v): v is string => typeof v === "string" && v.length > 0);
+    return filtered.length > 0 ? filtered : undefined;
   };
 
   const result: YooToolParams = {

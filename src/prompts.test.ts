@@ -99,6 +99,28 @@ describe("validateReviewResult", () => {
     assert.ok(result);
     assert.equal(result!.issues[0]!.line, 97);
   });
+
+  it("normalizes null file values to undefined", () => {
+    const result = validateReviewResult({
+      verdict: "needs-work",
+      issues: [{ severity: "high", file: null, issue: "x", suggestion: "y" }],
+      suggestions: [],
+      consensus: false,
+    });
+    assert.ok(result);
+    assert.equal(result!.issues[0]!.file, undefined);
+  });
+
+  it("preserves string file values", () => {
+    const result = validateReviewResult({
+      verdict: "needs-work",
+      issues: [{ severity: "high", file: "src/app.ts", issue: "x", suggestion: "y" }],
+      suggestions: [],
+      consensus: false,
+    });
+    assert.ok(result);
+    assert.equal(result!.issues[0]!.file, "src/app.ts");
+  });
 });
 
 describe("validateJudgeResult", () => {

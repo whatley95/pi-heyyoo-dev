@@ -90,6 +90,26 @@ export function getProviderApiInfo(provider: string): ProviderApiInfo | undefine
   return PROVIDER_API_MAP[provider.toLowerCase()];
 }
 
+function resolveProviderApiInfo(
+  provider: string,
+  config?: import("./types.js").HeyyooConfig,
+): ProviderApiInfo | undefined {
+  const secondary = config?.secondary;
+  if (secondary?.baseUrl) {
+    const style = secondary.style ?? "openai-compatible";
+    if (style !== "openai-compatible" && style !== "anthropic") {
+      throw new Error(`Unsupported secondary style: ${style}. Use "openai-compatible" or "anthropic".`);
+    }
+    return {
+      style,
+      baseUrl: secondary.baseUrl.replace(/\/$/, ""),
+      authHeader: secondary.authHeader || (style === "anthropic" ? "x-api-key" : "Authorization"),
+      authPrefix: secondary.authPrefix ?? (style === "anthropic" ? "" : "Bearer "),
+    };
+  }
+  return getProviderApiInfo(provider);
+}
+
 export async function callSecondaryModel(
   provider: string,
   model: string,
@@ -100,23 +120,29 @@ export async function callSecondaryModel(
   cwd?: string,
 ): Promise<{ content: string; usage: UsageCost }> {
   provider = provider.toLowerCase();
-  const apiInfo = getProviderApiInfo(provider);
+  const config = cwd ? loadHeyyooConfig(cwd) : undefined;
+  const apiInfo = resolveProviderApiInfo(provider, config);
   if (!apiInfo) {
-    throw new Error(`Unknown provider: ${provider}. Supported providers: ${Object.keys(PROVIDER_API_MAP).join(", ")}`);
-  }
-
-  const apiKey = resolveApiKey(provider);
-  if (!apiKey) {
     throw new Error(
-      `No API key found for provider "${provider}". Set the appropriate environment variable or configure auth.json.`,
+      `Unknown provider: ${provider}. Supported providers: ${Object.keys(PROVIDER_API_MAP).join(", ")}. ` +
+        `Or set pi-heyyoo.secondary.baseUrl to use any OpenAI-compatible or Anthropic-compatible endpoint.`,
     );
   }
 
+  const apiKey = resolveApiKey(provider, config?.secondary.apiKey);
+  if (!apiKey) {
+    throw new Error(
+      `No API key found for provider "${provider}". Set the appropriate environment variable, configure auth.json, ` +
+        `or set pi-heyyoo.secondary.apiKey.`,
+    );
+  }
+
+  const modelInfoOverride = buildModelInfoOverride(config, model);
   const thinkingEnabledForBudget = Boolean(thinking) && thinking?.toLowerCase() !== "off";
-  const modelInfoForBudget = cwd ? resolveModelInfo(provider, model) : undefined;
+  const modelInfoForBudget = cwd ? resolveModelInfo(provider, model, modelInfoOverride) : undefined;
 
   if (cwd) {
-    const budgetUsd = loadHeyyooConfig(cwd).costBudgetUsd;
+    const budgetUsd = config?.costBudgetUsd;
     if (budgetUsd !== undefined && budgetUsd >= 0) {
       const estimatedInputTokens = estimateTokens(systemPrompt + userPrompt);
       const estimatedOutputTokens = thinkingEnabledForBudget ? (modelInfoForBudget?.maxOutputTokens ?? 8192) : 2048;
@@ -133,9 +159,30 @@ export async function callSecondaryModel(
 
   try {
     if (apiInfo.style === "anthropic") {
-      return await callAnthropicApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, thinking);
+      return await callAnthropicApi(
+        provider,
+        apiInfo,
+        apiKey,
+        model,
+        systemPrompt,
+        userPrompt,
+        signal,
+        thinking,
+        modelInfoOverride,
+      );
     }
-    return await callOpenAiCompatibleApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, thinking);
+    return await callOpenAiCompatibleApi(
+      provider,
+      apiInfo,
+      apiKey,
+      model,
+      systemPrompt,
+      userPrompt,
+      signal,
+      thinking,
+      false,
+      modelInfoOverride,
+    );
   } catch (err) {
     if (cwd) {
       logEvent(cwd, "error", err instanceof Error ? err.message : String(err), {
@@ -143,10 +190,31 @@ export async function callSecondaryModel(
         model,
         thinking,
         promptTokensEstimate: Math.ceil((systemPrompt.length + userPrompt.length) / 4),
+        url: apiInfo.baseUrl,
       });
     }
     throw err;
   }
+}
+
+function buildModelInfoOverride(
+  config: import("./types.js").HeyyooConfig | undefined,
+  model: string,
+): Partial<import("./model-registry.js").ModelInfo> | undefined {
+  if (!config) return undefined;
+  const user = config.modelInfo?.[model.toLowerCase()];
+  const override: { contextWindow?: number; maxOutputTokens?: number } = {};
+  if (typeof config.secondary.contextWindow === "number" && Number.isFinite(config.secondary.contextWindow)) {
+    override.contextWindow = config.secondary.contextWindow;
+  } else if (typeof user?.contextWindow === "number" && Number.isFinite(user.contextWindow)) {
+    override.contextWindow = user.contextWindow;
+  }
+  if (typeof config.secondary.maxOutputTokens === "number" && Number.isFinite(config.secondary.maxOutputTokens)) {
+    override.maxOutputTokens = config.secondary.maxOutputTokens;
+  } else if (typeof user?.maxOutputTokens === "number" && Number.isFinite(user.maxOutputTokens)) {
+    override.maxOutputTokens = user.maxOutputTokens;
+  }
+  return Object.keys(override).length > 0 ? override : undefined;
 }
 
 function estimateCost(provider: string, model: string, inputTokens: number, outputTokens: number): number {
@@ -227,6 +295,7 @@ async function callOpenAiCompatibleApi(
   signal?: AbortSignal,
   thinking?: string,
   retriedWithReasoningOff = false,
+  modelInfoOverride?: Partial<import("./model-registry.js").ModelInfo>,
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = buildOpenAiUrl(apiInfo, apiKey);
 
@@ -234,7 +303,7 @@ async function callOpenAiCompatibleApi(
   const supportsAnthropicThinking = modelSupportsAnthropicThinking(provider, model);
   const thinkingEnabled =
     Boolean(thinking) && thinking!.toLowerCase() !== "off" && (supportsReasoning || supportsAnthropicThinking);
-  const modelInfo = resolveModelInfo(provider, model);
+  const modelInfo = resolveModelInfo(provider, model, modelInfoOverride);
   // Reasoning models can consume a large portion of the output budget in internal reasoning tokens,
   // so use the model's full output limit when thinking/reasoning is enabled. Otherwise keep calls cheap.
   const outputTokenLimit = thinkingEnabled ? modelInfo.maxOutputTokens : 2048;
@@ -318,7 +387,18 @@ async function callOpenAiCompatibleApi(
   ) {
     // The model spent its whole output budget on reasoning_content. Retry once with reasoning disabled
     // so there is room for the required structured content.
-    return callOpenAiCompatibleApi(provider, apiInfo, apiKey, model, systemPrompt, userPrompt, signal, "off", true);
+    return callOpenAiCompatibleApi(
+      provider,
+      apiInfo,
+      apiKey,
+      model,
+      systemPrompt,
+      userPrompt,
+      signal,
+      "off",
+      true,
+      modelInfoOverride,
+    );
   }
 
   if (!content || content.trim().length === 0) {
@@ -382,12 +462,14 @@ async function callAnthropicApi(
   userPrompt: string,
   signal?: AbortSignal,
   thinking?: string,
+  modelInfoOverride?: Partial<import("./model-registry.js").ModelInfo>,
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = `${apiInfo.baseUrl}/messages`;
 
   const thinkingEnabled = Boolean(thinking) && (thinking as string).toLowerCase() !== "off";
+  const modelInfo = resolveModelInfo(provider, model, modelInfoOverride);
   // Anthropic counts thinking tokens against max_tokens, so reserve room for visible output.
-  const outputTokenLimit = thinkingEnabled ? 8192 : 2048;
+  const outputTokenLimit = thinkingEnabled ? modelInfo.maxOutputTokens : 2048;
 
   const body: Record<string, unknown> = {
     model,
@@ -515,20 +597,36 @@ function thinkingBudget(level: string): number {
   return budgets[level?.toLowerCase()] ?? 1024;
 }
 
+function formatFetchError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const parts: string[] = [message];
+  if (err instanceof Error && err.cause instanceof Error) {
+    parts.push(`cause: ${err.cause.message}`);
+  }
+  if (err instanceof AggregateError) {
+    for (const e of err.errors) {
+      parts.push(`cause: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return parts.join("; ");
+}
+
 async function fetchWithRetry(url: string, init: RequestInit, maxRetries = 2, baseDelayMs = 500): Promise<Response> {
-  let lastError: Error | undefined;
+  const attemptErrors: string[] = [];
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch(url, init);
       // Retry on 5xx and rate-limit (429); do not retry on 4xx auth/validation errors.
       if (response.status >= 500 || response.status === 429) {
         const text = await response.text().catch(() => "(no body)");
-        lastError = new Error(`Transient API error (${response.status}): ${text.slice(0, 200)}`);
+        const errorText = `Transient API error (${response.status}): ${text.slice(0, 200)}`;
+        attemptErrors.push(`attempt ${attempt + 1}: ${errorText}`);
       } else {
         return response;
       }
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      const errorText = formatFetchError(err);
+      attemptErrors.push(`attempt ${attempt + 1}: ${errorText}`);
     }
 
     if (attempt < maxRetries) {
@@ -552,5 +650,5 @@ async function fetchWithRetry(url: string, init: RequestInit, maxRetries = 2, ba
       }
     }
   }
-  throw lastError ?? new Error("Secondary model request failed after retries");
+  throw new Error(`Secondary model request failed after ${maxRetries + 1} attempts: ${attemptErrors.join(" | ")}`);
 }

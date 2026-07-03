@@ -5,6 +5,16 @@ export interface HeyyooConfig {
     thinking?: string;
     contextWindow?: number;
     maxOutputTokens?: number;
+    /** Custom base URL for any OpenAI-compatible or Anthropic-compatible provider. */
+    baseUrl?: string;
+    /** Inline API key. Prefer auth.json or env vars; this is a fallback. */
+    apiKey?: string;
+    /** API style when using a custom baseUrl. Defaults to openai-compatible. */
+    style?: "openai-compatible" | "anthropic";
+    /** Custom auth header name when using baseUrl. Defaults to Authorization. */
+    authHeader?: string;
+    /** Custom auth prefix when using baseUrl. Defaults to "Bearer ". */
+    authPrefix?: string;
   };
   autoJudge?: boolean;
   preReviewCommands?: string[];
@@ -14,6 +24,8 @@ export interface HeyyooConfig {
   reviewMaxInputTokens?: number;
   reviewStrategy?: "auto" | "diff-only" | "full-files";
   verifyByDefault?: boolean;
+  /** Per-model token-budget overrides. Key is the model id (e.g. "qwen3.7-max"). */
+  modelInfo?: Record<string, { contextWindow?: number; maxOutputTokens?: number }>;
 }
 
 export interface PlanResult {

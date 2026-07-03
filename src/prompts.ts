@@ -406,10 +406,13 @@ export function validatePlanResult(data: unknown): PlanResult | null {
   return castOrNull<PlanResult>(PlanResultSchema, data);
 }
 
-// The secondary model sometimes returns null or descriptive text for the `line` field.
-// Remove those so downstream code always sees a number or nothing.
-function normalizeIssueLines(issues: ReviewIssue[]): void {
+// The secondary model sometimes returns null or descriptive text for issue fields.
+// Remove those so downstream code always sees the expected types or nothing.
+function normalizeIssueFields(issues: ReviewIssue[]): void {
   for (const issue of issues) {
+    if (typeof issue.file !== "string") {
+      delete issue.file;
+    }
     if (typeof issue.line !== "number") {
       delete issue.line;
     }
@@ -419,7 +422,7 @@ function normalizeIssueLines(issues: ReviewIssue[]): void {
 export function validateReviewResult(data: unknown): ReviewResult | null {
   const result = castOrNull<ReviewResult>(ReviewResultSchema, data);
   if (!result) return null;
-  normalizeIssueLines(result.issues);
+  normalizeIssueFields(result.issues);
   // Consensus is meaningful only when the verdict is pass and no issues remain.
   result.consensus = result.verdict === "pass" && result.issues.length === 0;
   return result;
@@ -436,7 +439,7 @@ export function validateRecommendResult(data: unknown): RecommendResult | null {
 export function validateJudgeResult(data: unknown): JudgeResult | null {
   const result = castOrNull<JudgeResult>(JudgeResultSchema, data);
   if (!result) return null;
-  normalizeIssueLines(result.issues);
+  normalizeIssueFields(result.issues);
   return result;
 }
 
