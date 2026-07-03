@@ -8,13 +8,13 @@ import type { ProviderApiInfo, UsageCost } from "./types.js";
 const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
   "opencode-go": {
     style: "openai-compatible",
-    baseUrl: "https://api.opencode.ai/v1",
+    baseUrl: "https://gateway.opencode.ai/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
   },
   opencode: {
     style: "openai-compatible",
-    baseUrl: "https://api.opencode.ai/v1",
+    baseUrl: "https://gateway.opencode.ai/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
   },
