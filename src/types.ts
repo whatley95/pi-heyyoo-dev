@@ -1,4 +1,4 @@
-export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan";
+export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan" | "test" | "security";
 
 export interface SecondaryModelConfig {
   provider: string;
@@ -26,6 +26,8 @@ export interface HeyyooConfig {
   taskModels?: Partial<Record<YooAction, Partial<SecondaryModelConfig>>>;
   autoJudge?: boolean;
   preReviewCommands?: string[];
+  /** Custom command to run for yoo.test analysis (e.g. "npm test"). If omitted, yoo.test will auto-detect or fall back to static diff analysis. */
+  testCommand?: string;
   costBudgetUsd?: number;
   reviewMaxDiffChars?: number;
   reviewFullFileThresholdLines?: number;
@@ -90,6 +92,42 @@ export interface JudgeResult extends ReviewResult {
   summary: string;
 }
 
+export interface TestFinding {
+  severity: "high" | "medium" | "low";
+  file?: string;
+  line?: number;
+  issue: string;
+  suggestion: string;
+  category?: string;
+}
+
+export interface MissingTest {
+  file?: string;
+  reason: string;
+}
+
+export interface TestResult {
+  verdict: "pass" | "needs-work" | "blocked";
+  findings: TestFinding[];
+  missingTests: MissingTest[];
+  summary: string;
+}
+
+export interface SecurityFinding {
+  severity: "critical" | "high" | "medium" | "low";
+  file?: string;
+  line?: number;
+  issue: string;
+  suggestion: string;
+  category: string;
+}
+
+export interface SecurityResult {
+  verdict: "pass" | "needs-review";
+  findings: SecurityFinding[];
+  summary: string;
+}
+
 export interface HeyyooSessionState {
   plan?: PlanResult;
   completedSteps: number;
@@ -105,6 +143,8 @@ export interface YooToolParams {
   recommend?: string;
   judge?: string;
   scan?: boolean;
+  test?: string;
+  security?: string;
   files?: string[];
   exclude?: string[];
   revision?: string;
@@ -122,6 +162,8 @@ export interface YooToolResult {
   recommend?: RecommendResult;
   judge?: JudgeResult;
   scan?: ScanResult;
+  test?: TestResult;
+  security?: SecurityResult;
   error?: string;
   cost?: UsageCost;
   inProgress?: boolean;

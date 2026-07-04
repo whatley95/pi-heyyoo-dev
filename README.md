@@ -62,9 +62,10 @@ If no secondary model is configured, yoo returns an error. Configure `pi-heyyoo.
 | Option                         | Type                                    | Description                                                                                                                         |
 | ------------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `secondary`                    | object                                  | `{ provider, id, thinking? }` for the base secondary model                                                                          |
-| `taskModels`                   | object                                  | Per-tool model overrides keyed by action (`plan`, `review`, `suggest`, `recommend`, `judge`, `scan`)                                |
+| `taskModels`                   | object                                  | Per-tool model overrides keyed by action (`plan`, `review`, `suggest`, `recommend`, `judge`, `scan`, `test`, `security`)            |
 | `autoJudge`                    | boolean                                 | Run `yoo.judge` automatically when the last plan step passes review                                                                 |
 | `preReviewCommands`            | string[]                                | Commands to run before each review; output is included in the review prompt                                                         |
+| `testCommand`                  | string                                  | Command to run for `/yoo test` analysis (e.g. `npm test`). Auto-detected from `package.json` if omitted                             |
 | `costBudgetUsd`                | number                                  | Maximum estimated session spend before yoo stops with an error. Negative values are treated as unset; `0` means no spend is allowed |
 | `reviewMaxDiffChars`           | number                                  | Legacy cap on diff characters; prefer `reviewMaxInputTokens`                                                                        |
 | `reviewFullFileThresholdLines` | number                                  | Include full content for changed files under this line count (default: 300)                                                         |
@@ -84,46 +85,50 @@ If no secondary model is configured, yoo returns an error. Configure `pi-heyyoo.
 
 The `yoo` tool is called by the main agent during development:
 
-| Action                                                                | When                           | What it does                                                       |
-| --------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------ |
-| `yoo({ plan: "refactor auth" })`                                      | Before starting                | Creates structured todo + acceptance criteria                      |
-| `yoo({ review: "wrote middleware" })`                                 | After each step                | Reviews git diff, returns verdict + issues                         |
-| `yoo({ review: "wrote middleware", files: ["src/auth.ts"] })`         | After each step                | Reviews only the listed files                                      |
-| `yoo({ review: "wrote middleware", exclude: ["package-lock.json"] })` | After each step                | Reviews diff excluding listed files                                |
-| `yoo({ review: "wrote middleware", revision: "HEAD~1" })`             | After each step                | Reviews changes against a specific revision                        |
-| `yoo({ review: "wrote middleware", untracked: true })`                | After each step                | Includes untracked (new) files in the review                       |
-| `yoo({ suggest: "how to..." })`                                       | When stuck or asked a question | Returns alternative approaches with pros/cons                      |
-| `yoo({ recommend: "what next" })`                                     | When unsure                    | Recommends next concrete step                                      |
-| `yoo({ judge: "all done" })`                                          | Final review                   | Holistic review against original plan                              |
-| `yoo({ scan: true })`                                                 | Once per project               | Learns project conventions and architecture                        |
-| `yoo({ review: "...", verify: true })`                                | Any high-stakes result         | Asks the main agent to confirm or refute the finding with evidence |
+| Action                                                                | When                           | What it does                                                        |
+| --------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------- |
+| `yoo({ plan: "refactor auth" })`                                      | Before starting                | Creates structured todo + acceptance criteria                       |
+| `yoo({ review: "wrote middleware" })`                                 | After each step                | Reviews git diff, returns verdict + issues                          |
+| `yoo({ review: "wrote middleware", files: ["src/auth.ts"] })`         | After each step                | Reviews only the listed files                                       |
+| `yoo({ review: "wrote middleware", exclude: ["package-lock.json"] })` | After each step                | Reviews diff excluding listed files                                 |
+| `yoo({ review: "wrote middleware", revision: "HEAD~1" })`             | After each step                | Reviews changes against a specific revision                         |
+| `yoo({ review: "wrote middleware", untracked: true })`                | After each step                | Includes untracked (new) files in the review                        |
+| `yoo({ suggest: "how to..." })`                                       | When stuck or asked a question | Returns alternative approaches with pros/cons                       |
+| `yoo({ recommend: "what next" })`                                     | When unsure                    | Recommends next concrete step                                       |
+| `yoo({ judge: "all done" })`                                          | Final review                   | Holistic review against original plan                               |
+| `yoo({ scan: true })`                                                 | Once per project               | Learns project conventions and architecture                         |
+| `yoo({ test: "added payment service" })`                              | After code changes             | Checks for failing tests, missing tests, and test-quality issues    |
+| `yoo({ security: "auth changes" })`                                   | Security-sensitive changes     | Audits diff for secrets, injection, auth, and other vulnerabilities |
+| `yoo({ review: "...", verify: true })`                                | Any high-stakes result         | Asks the main agent to confirm or refute the finding with evidence  |
 
 ## Commands
 
-| Command                                       | What it does                                                                           |
-| --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `/yoo`                                        | Compact status card: version, model, plan, VCS, cost, conventions                      |
-| `/yoo plan refactor auth middleware`          | Create a plan from the terminal                                                        |
-| `/yoo review "wrote verifySession"`           | Review current changes                                                                 |
-| `/yoo suggest "redis vs in-memory sessions?"` | Get alternative approaches                                                             |
-| `/yoo recommend`                              | Get a recommended next step                                                            |
-| `/yoo judge "auth refactor complete"`         | Final holistic review                                                                  |
-| `/yoo scan`                                   | Scan project conventions                                                               |
-| `/yoo-status`                                 | Detailed diagnostics: config, plan, VCS, conventions, session cost                     |
-| `/yoo-info`                                   | Alias for `/yoo-status`                                                                |
-| `/yoo-model`                                  | Interactively pick the base or per-tool model from configured providers                |
-| `/yoo-model <provider> [filter]`              | Pre-select provider and optionally filter the model list                               |
-| `/yoo-config`                                 | Show current `pi-heyyoo` settings                                                      |
-| `/yoo-config get <key>`                       | Read a dotted setting (e.g. `/yoo-config get secondary.thinking`)                      |
-| `/yoo-config set <key> <value>`               | Write a dotted setting (e.g. `/yoo-config set taskModels.review.id claude-sonnet-4-5`) |
-| `/yoo-config <provider.model>`                | Set the base secondary model directly (e.g. `/yoo-config openai.gpt-4o`)               |
-| `/yoo-test`                                   | Test connectivity to the base and all per-tool configured models                       |
-| `/yoo-backend <pi\|http>`                     | Switch secondary model backend (default: `pi`)                                         |
-| `/yoo-clear`                                  | Clear the active plan, session state, cost, memory, and conventions                    |
-| `/yoo-next`                                   | Recommend the next step based on the active plan                                       |
-| `/yoo-done`                                   | Mark the current plan step complete and recommend the next step                        |
-| `/yoo-logs`                                   | Show recent error/event log entries for this project                                   |
-| `/yoo-clear-logs`                             | Clear the yoo error/event log for this project                                         |
+| Command                                        | What it does                                                                           |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `/yoo`                                         | Compact status card: version, model, plan, VCS, cost, conventions                      |
+| `/yoo plan refactor auth middleware`           | Create a plan from the terminal                                                        |
+| `/yoo review "wrote verifySession"`            | Review current changes                                                                 |
+| `/yoo suggest "redis vs in-memory sessions?"`  | Get alternative approaches with pros/cons                                              |
+| `/yoo recommend`                               | Get one concrete next step based on your current situation/plan                        |
+| `/yoo judge "auth refactor complete"`          | Final holistic review                                                                  |
+| `/yoo scan`                                    | Scan project conventions                                                               |
+| `/yoo test [description] [--command <cmd>]`    | Analyze test coverage and failures for current changes                                 |
+| `/yoo security [description] [--full-project]` | Security audit of current diff or sampled project files                                |
+| `/yoo-status`                                  | Detailed diagnostics: base + per-tool models, config, plan, VCS, conventions, cost     |
+| `/yoo-info`                                    | Alias for `/yoo-status`                                                                |
+| `/yoo-model`                                   | Interactively pick the base or per-tool model; shows current provider/model/thinking   |
+| `/yoo-model <provider> [filter]`               | Pre-select provider and optionally filter the model list                               |
+| `/yoo-config`                                  | Show current `pi-heyyoo` settings                                                      |
+| `/yoo-config get <key>`                        | Read a dotted setting (e.g. `/yoo-config get secondary.thinking`)                      |
+| `/yoo-config set <key> <value>`                | Write a dotted setting (e.g. `/yoo-config set taskModels.review.id claude-sonnet-4-5`) |
+| `/yoo-config <provider.model>`                 | Set the base secondary model directly (e.g. `/yoo-config openai.gpt-4o`)               |
+| `/yoo-test`                                    | Test connectivity; prints a per-model summary with latency, tokens, cost, and totals   |
+| `/yoo-backend <pi\|http>`                      | Switch secondary model backend (default: `pi`)                                         |
+| `/yoo-clear`                                   | Clear the active plan, session state, cost, memory, and conventions                    |
+| `/yoo-next`                                    | Recommend the next step based on the active plan                                       |
+| `/yoo-done`                                    | Mark the current plan step complete and recommend the next step                        |
+| `/yoo-logs`                                    | Show recent error/event log entries for this project                                   |
+| `/yoo-clear-logs`                              | Clear the yoo error/event log for this project                                         |
 
 ### Review command options
 
@@ -145,6 +150,8 @@ The `yoo` tool is called by the main agent during development:
 | `--exclude` / `-x`  | Comma-separated list of files/patterns to exclude               |
 | `--vcs git\|svn`    | Force Git or SVN diff mode                                      |
 | `--untracked`       | Include untracked (new) files                                   |
+
+`/yoo test` and `/yoo security` accept the same diff-scoping flags as `/yoo review` (`--files`, `--exclude`, `--revision`, `--since`, `--vcs`, `--untracked`). `/yoo-test` (with a hyphen) is a separate command that tests model connectivity.
 
 ## Logging
 
@@ -249,10 +256,12 @@ Set `verifyByDefault: true` in `pi-heyyoo` settings to request verification on e
 
 yoo is not only for code changes. Use it for questions and decisions too:
 
-- `yoo({ suggest: "should I use callbacks or async/await here?" })` — get alternative approaches with pros/cons before answering the user.
-- `yoo({ recommend: "what should I investigate next?" })` — get a concrete next step when progress stalls.
+- `yoo({ suggest: "should I use callbacks or async/await here?" })` — compare 2–3 alternative approaches with pros/cons when you are unsure which path to take.
+- `yoo({ recommend: "what should I investigate next?" })` — get one decisive next step, with reasoning and rejected alternatives, based on your current situation and plan.
 
 When the user asks a technical or architectural question, call `yoo.suggest` or `yoo.recommend` before answering from your own knowledge.
+
+**Suggest vs Recommend:** `suggest` is for exploring options; `recommend` is for deciding what to do next.
 
 ## Supported providers
 

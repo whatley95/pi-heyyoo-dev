@@ -5,10 +5,14 @@ import {
   validateReviewResult,
   validateJudgeResult,
   validateConventionsResult,
+  validateTestResult,
+  validateSecurityResult,
   buildPlanPrompt,
   buildAdaptiveReviewPrompt,
   buildScanPrompt,
   buildRecommendPrompt,
+  buildTestPrompt,
+  buildSecurityPrompt,
   clearPromptCache,
 } from "./prompts.js";
 
@@ -244,6 +248,105 @@ describe("prompt caching", () => {
     clearPromptCache();
     const b = buildPlanPrompt("task", "conventions");
     assert.notEqual(b.system, "mutated");
+  });
+});
+
+describe("buildTestPrompt", () => {
+  it("includes diff, test output, and conventions", () => {
+    const prompt = buildTestPrompt(
+      "added auth",
+      "diff",
+      [{ file: "src/auth.ts", content: "...", mode: "full" }],
+      "1 passing",
+      "naming: camelCase",
+    );
+    assert.ok(prompt.system.includes("test coverage"));
+    assert.ok(prompt.user.includes("added auth"));
+    assert.ok(prompt.user.includes("diff"));
+    assert.ok(prompt.user.includes("1 passing"));
+    assert.ok(prompt.user.includes("naming: camelCase"));
+  });
+});
+
+describe("buildSecurityPrompt", () => {
+  it("includes diff, file contents, and conventions", () => {
+    const prompt = buildSecurityPrompt(
+      "auth changes",
+      "diff",
+      [{ file: "src/auth.ts", content: "...", mode: "full" }],
+      "naming: camelCase",
+    );
+    assert.ok(prompt.system.includes("security audit"));
+    assert.ok(prompt.user.includes("auth changes"));
+    assert.ok(prompt.user.includes("diff"));
+    assert.ok(prompt.user.includes("src/auth.ts"));
+    assert.ok(prompt.user.includes("naming: camelCase"));
+  });
+});
+
+describe("validateTestResult", () => {
+  it("accepts a valid test result", () => {
+    const result = validateTestResult({
+      verdict: "needs-work",
+      findings: [
+        { severity: "high", file: "src/a.ts", line: 5, issue: "x", suggestion: "y", category: "missing-test" },
+      ],
+      missingTests: [{ file: "src/a.ts", reason: "no coverage" }],
+      summary: "needs tests",
+    });
+    assert.ok(result);
+    assert.equal(result!.verdict, "needs-work");
+    assert.equal(result!.findings[0]!.line, 5);
+  });
+
+  it("normalizes null file/line/category values", () => {
+    const result = validateTestResult({
+      verdict: "pass",
+      findings: [{ severity: "low", file: null, line: null, issue: "x", suggestion: "y", category: null }],
+      missingTests: [{ file: null, reason: "general" }],
+      summary: "ok",
+    });
+    assert.ok(result);
+    assert.equal(result!.findings[0]!.file, undefined);
+    assert.equal(result!.findings[0]!.line, undefined);
+    assert.equal(result!.findings[0]!.category, undefined);
+    assert.equal(result!.missingTests[0]!.file, undefined);
+  });
+
+  it("rejects malformed data", () => {
+    const result = validateTestResult("not an object");
+    assert.equal(result, null);
+  });
+});
+
+describe("validateSecurityResult", () => {
+  it("accepts a valid security result", () => {
+    const result = validateSecurityResult({
+      verdict: "needs-review",
+      findings: [
+        { severity: "critical", file: "src/auth.ts", line: 10, issue: "x", suggestion: "y", category: "auth" },
+      ],
+      summary: "audit",
+    });
+    assert.ok(result);
+    assert.equal(result!.verdict, "needs-review");
+    assert.equal(result!.findings[0]!.severity, "critical");
+  });
+
+  it("normalizes null file/line values", () => {
+    const result = validateSecurityResult({
+      verdict: "pass",
+      findings: [{ severity: "low", file: null, line: null, issue: "x", suggestion: "y", category: "other" }],
+      summary: "ok",
+    });
+    assert.ok(result);
+    assert.equal(result!.findings[0]!.file, undefined);
+    assert.equal(result!.findings[0]!.line, undefined);
+  });
+
+  it("rejects malformed data", () => {
+    const result = validateSecurityResult("not an object");
+    assert.equal(result, null);
   });
 });
 

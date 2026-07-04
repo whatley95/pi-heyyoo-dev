@@ -7,6 +7,8 @@ import type {
   RecommendResult,
   JudgeResult,
   Conventions,
+  TestResult,
+  SecurityResult,
 } from "./types.js";
 import {
   PlanResultSchema,
@@ -15,6 +17,8 @@ import {
   RecommendResultSchema,
   JudgeResultSchema,
   ConventionsSchema,
+  TestResultSchema,
+  SecurityResultSchema,
 } from "./schemas.js";
 
 const PAIR_PROGRAMMER_PERSONA = `You are a senior pair programmer sitting next to the developer. You are collaborative, direct, and focused on shipping correct, maintainable code. You explain your reasoning briefly but stay actionable.`;
@@ -286,6 +290,90 @@ Rules:
   };
 }
 
+function buildTestPromptImpl(
+  description: string,
+  diff: string,
+  fileContents: FileContentContext[],
+  testOutput: string,
+  conventions?: string,
+): { system: string; user: string } {
+  const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const fileContentsBlock =
+    fileContents.length > 0
+      ? `\n\n<file_contents>\n${fileContents.map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`).join("\n\n")}\n</file_contents>`
+      : "";
+  const testOutputBlock = testOutput
+    ? `\n\n<test_output>\n${testOutput}\n</test_output>`
+    : "\n\nNo test command output was provided. Analyze the diff statically for test coverage and quality.";
+
+  return {
+    system: `${PAIR_PROGRAMMER_PERSONA}
+
+You are reviewing the latest code change specifically for test coverage, test quality, and test failures.
+
+Return ONLY a JSON object with this exact structure — no extra text, no markdown fences:
+{
+  "verdict": "pass" | "needs-work" | "blocked",
+  "findings": [
+    { "severity": "high" | "medium" | "low", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it", "category": "failing-test" | "missing-test" | "test-quality" | "coverage" }
+  ],
+  "missingTests": [
+    { "file": "src/feature.ts", "reason": "explain what behavior needs a test" }
+  ],
+  "summary": "one-paragraph assessment"
+}
+
+Rules:
+- "verdict" is "pass" only if the diff has adequate tests and no failing tests
+- "verdict" is "blocked" if tests are failing in a way that prevents merging
+- "verdict" is "needs-work" for missing tests or low-quality tests that should be improved
+- "findings" should include failing tests, brittle tests, missing assertions, or tests that do not verify the described behavior
+- "missingTests" should list concrete production files whose changed behavior lacks a corresponding test
+- Be specific and evidence-based; do not invent files or failures not shown in the test output or diff
+- Respect project conventions when suggesting test file names or patterns`,
+
+    user: `Review this change for test coverage and quality. The developer says:\n\n${description}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${testOutputBlock}${conventionsBlock}`,
+  };
+}
+
+function buildSecurityPromptImpl(
+  description: string,
+  diff: string,
+  fileContents: FileContentContext[],
+  conventions?: string,
+): { system: string; user: string } {
+  const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const fileContentsBlock =
+    fileContents.length > 0
+      ? `\n\n<file_contents>\n${fileContents.map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`).join("\n\n")}\n</file_contents>`
+      : "";
+
+  return {
+    system: `${PAIR_PROGRAMMER_PERSONA}
+
+You are performing a security audit of the latest code change. Look for common vulnerabilities and risky patterns.
+
+Return ONLY a JSON object with this exact structure — no extra text, no markdown fences:
+{
+  "verdict": "pass" | "needs-review",
+  "findings": [
+    { "severity": "critical" | "high" | "medium" | "low", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it", "category": "secrets" | "injection" | "auth" | "access-control" | "validation" | "dependencies" | "crypto" | "logging" | "other" }
+  ],
+  "summary": "one-paragraph security assessment"
+}
+
+Rules:
+- "verdict" is "pass" only if no findings are high or critical
+- "verdict" is "needs-review" if any medium+ finding exists
+- Each finding must include a specific, actionable remediation suggestion
+- Categories must be one of: secrets, injection, auth, access-control, validation, dependencies, crypto, logging, other
+- Do not flag speculative risks with no evidence in the provided diff or files
+- Pay special attention to: hardcoded secrets, SQL/command injection, unsafe eval, missing input validation, insecure auth, permissive CORS, dependency upgrades, and logging sensitive data`,
+
+    user: `Audit this change for security issues. The developer says:\n\n${description}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${conventionsBlock}`,
+  };
+}
+
 function buildJudgePromptImpl(
   description: string,
   planTodo?: string[],
@@ -352,6 +440,8 @@ const SCAN_PROMPT = buildScanPromptImpl();
 export const buildScanPrompt = () => ({ system: SCAN_PROMPT.system, user: SCAN_PROMPT.user });
 export const buildSuggestPrompt = memoizePromptBuilder(buildSuggestPromptImpl);
 export const buildRecommendPrompt = memoizePromptBuilder(buildRecommendPromptImpl);
+export const buildTestPrompt = buildTestPromptImpl;
+export const buildSecurityPrompt = buildSecurityPromptImpl;
 export const buildJudgePrompt = memoizePromptBuilder(buildJudgePromptImpl);
 
 export function parseJsonResponse<T>(text: string): T | null {
@@ -495,6 +585,56 @@ export function validateJudgeResult(data: unknown): JudgeResult | null {
   const result = castOrNull<JudgeResult>(JudgeResultSchema, data);
   if (!result) return null;
   normalizeIssueFields(result.issues);
+  return result;
+}
+
+function normalizeTestFindingFields(findings: import("./types.js").TestFinding[]): void {
+  for (const finding of findings) {
+    if (typeof finding.file !== "string") {
+      delete finding.file;
+    }
+    if (typeof finding.line !== "number") {
+      delete finding.line;
+    }
+    if (typeof finding.category !== "string") {
+      delete finding.category;
+    }
+  }
+}
+
+function normalizeSecurityFindingFields(findings: import("./types.js").SecurityFinding[]): void {
+  for (const finding of findings) {
+    if (typeof finding.file !== "string") {
+      delete finding.file;
+    }
+    if (typeof finding.line !== "number") {
+      delete finding.line;
+    }
+  }
+}
+
+function normalizeMissingTests(missing: import("./types.js").MissingTest[]): void {
+  for (const item of missing) {
+    if (typeof item.file !== "string") {
+      delete item.file;
+    }
+  }
+}
+
+export function validateTestResult(data: unknown): TestResult | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const result = castOrNull<TestResult>(TestResultSchema, data);
+  if (!result) return null;
+  normalizeTestFindingFields(result.findings);
+  normalizeMissingTests(result.missingTests);
+  return result;
+}
+
+export function validateSecurityResult(data: unknown): SecurityResult | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const result = castOrNull<SecurityResult>(SecurityResultSchema, data);
+  if (!result) return null;
+  normalizeSecurityFindingFields(result.findings);
   return result;
 }
 

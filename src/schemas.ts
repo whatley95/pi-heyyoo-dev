@@ -88,3 +88,54 @@ export const ConventionsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const TestFindingSchema = Type.Object(
+  {
+    severity: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+    file: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    line: Type.Optional(Type.Union([Type.Number(), Type.Null(), Type.String()])),
+    issue: Type.String(),
+    suggestion: Type.String(),
+    category: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
+export const MissingTestSchema = Type.Object(
+  {
+    file: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    reason: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const TestResultSchema = Type.Object(
+  {
+    verdict: Type.Union([Type.Literal("pass"), Type.Literal("needs-work"), Type.Literal("blocked")]),
+    findings: Type.Array(TestFindingSchema),
+    missingTests: Type.Array(MissingTestSchema),
+    summary: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const SecurityFindingSchema = Type.Object(
+  {
+    severity: Type.Union([Type.Literal("critical"), Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+    file: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    line: Type.Optional(Type.Union([Type.Number(), Type.Null(), Type.String()])),
+    issue: Type.String(),
+    suggestion: Type.String(),
+    category: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const SecurityResultSchema = Type.Object(
+  {
+    verdict: Type.Union([Type.Literal("pass"), Type.Literal("needs-review")]),
+    findings: Type.Array(SecurityFindingSchema),
+    summary: Type.String(),
+  },
+  { additionalProperties: false },
+);

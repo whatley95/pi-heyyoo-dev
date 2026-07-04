@@ -99,6 +99,8 @@ export function renderCall(params: unknown, theme: Theme, context?: ToolRenderCo
   else if (p.recommend) label = `yoo recommend: ${truncate(String(p.recommend), 80)}`;
   else if (p.judge) label = `yoo judge: ${truncate(String(p.judge), 80)}`;
   else if (p.scan) label = "yoo scan";
+  else if (p.test) label = `yoo test: ${truncate(String(p.test), 80)}`;
+  else if (p.security) label = `yoo security: ${truncate(String(p.security), 80)}`;
   else label = "yoo";
 
   const text = getTextComponent(context);
@@ -189,6 +191,27 @@ export function renderResult(
   if (r.recommend) {
     lines.push(theme.fg("yoo", "yoo recommend"));
     lines.push(`  → ${r.recommend.nextStep}`);
+  }
+
+  if (r.test) {
+    const icon = r.test.verdict === "pass" ? "✓" : r.test.verdict === "blocked" ? "✗" : "⚠";
+    const color = r.test.verdict === "pass" ? "green" : r.test.verdict === "blocked" ? "error" : "yellow";
+    lines.push(theme.fg(color, `yoo test ${icon} ${r.test.verdict}`));
+    if (r.test.missingTests.length > 0) {
+      lines.push(`  ${theme.fg("dim", `${r.test.missingTests.length} missing test(s)`)}`);
+    }
+    if (r.test.findings.length > 0) {
+      lines.push(`  ${theme.fg("dim", `${r.test.findings.length} finding(s)`)}`);
+    }
+  }
+
+  if (r.security) {
+    const icon = r.security.verdict === "pass" ? "✓" : "⚠";
+    const color = r.security.verdict === "pass" ? "green" : "error";
+    lines.push(theme.fg(color, `yoo security ${icon} ${r.security.verdict}`));
+    if (r.security.findings.length > 0) {
+      lines.push(`  ${theme.fg("dim", `${r.security.findings.length} security finding(s)`)}`);
+    }
   }
 
   if (r.judge) {

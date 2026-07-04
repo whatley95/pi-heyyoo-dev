@@ -140,7 +140,16 @@ function mergePartialSecondary(
   return mergeSecondaryFields(base, override);
 }
 
-const VALID_YOO_ACTIONS = new Set<string>(["plan", "review", "suggest", "recommend", "judge", "scan"]);
+const VALID_YOO_ACTIONS = new Set<string>([
+  "plan",
+  "review",
+  "suggest",
+  "recommend",
+  "judge",
+  "scan",
+  "test",
+  "security",
+]);
 
 function mergeTaskModels(base: HeyyooConfig["taskModels"], override: unknown): HeyyooConfig["taskModels"] {
   if (!override || typeof override !== "object" || Array.isArray(override)) {
@@ -174,6 +183,8 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     preReviewCommands: Array.isArray(o.preReviewCommands)
       ? o.preReviewCommands.filter((c): c is string => typeof c === "string" && c.trim().length > 0)
       : base.preReviewCommands,
+    testCommand:
+      typeof o.testCommand === "string" && o.testCommand.trim().length > 0 ? o.testCommand.trim() : base.testCommand,
     costBudgetUsd: normalizeCostBudgetUsd(o.costBudgetUsd, base.costBudgetUsd),
     reviewMaxDiffChars: pickOptionalNumber(o.reviewMaxDiffChars, base.reviewMaxDiffChars),
     reviewFullFileThresholdLines: pickOptionalNumber(o.reviewFullFileThresholdLines, base.reviewFullFileThresholdLines),

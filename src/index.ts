@@ -15,6 +15,8 @@ import {
   buildAdaptiveReviewPrompt,
   buildSuggestPrompt,
   buildRecommendPrompt,
+  buildTestPrompt,
+  buildSecurityPrompt,
   buildJudgePrompt,
   buildScanPrompt,
   clearPromptCache,
@@ -23,6 +25,8 @@ import {
   validateReviewResult,
   validateSuggestResult,
   validateRecommendResult,
+  validateTestResult,
+  validateSecurityResult,
   validateJudgeResult,
   validateConventionsResult,
   getJsonParseError,
@@ -78,6 +82,8 @@ const STAGES = {
   recommend: 3,
   judge: 3,
   scan: 4,
+  test: 5,
+  security: 4,
 } as const;
 
 function secondaryModelLabel(secondary: SecondaryModelConfig): string {
@@ -583,6 +589,229 @@ async function executeYooReview(
   return { action: "review", review, cost };
 }
 
+function mapFileContentEntries(
+  entries: FileContentEntry[],
+): { file: string; content: string; mode: "full" | "outline" }[] {
+  return entries.map((e) => ({ file: e.file, content: e.content, mode: e.mode }));
+}
+
+function detectTestCommand(cwd: string, conventions: import("./types.js").Conventions | null): string | undefined {
+  try {
+    const pkgPath = join(cwd, "package.json");
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { scripts?: Record<string, string> };
+      if (typeof pkg.scripts?.test === "string" && pkg.scripts.test.trim().length > 0) {
+        return "npm test";
+      }
+    }
+  } catch {
+    // ignore
+  }
+  const testScript = conventions?.scripts.find((s) => s.trim().startsWith("test:"));
+  if (testScript) {
+    return testScript.replace(/^test:\s*/, "").trim();
+  }
+  return undefined;
+}
+
+async function executeYooTest(
+  cwd: string,
+  description: string,
+  ctx: ExtensionContext,
+  options: {
+    files?: string[];
+    exclude?: string[];
+    revision?: string;
+    since?: string;
+    vcs?: "git" | "svn";
+    untracked?: boolean;
+    command?: string;
+  } = {},
+  signal: AbortSignal | undefined,
+  progress: ProgressReporter,
+): Promise<YooToolResult> {
+  const config = loadHeyyooConfig(cwd);
+  const modelConfig = resolveTaskModel(config, "test");
+  if (!modelConfig.provider || !modelConfig.id) {
+    return { action: "test", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
+  }
+
+  progress(1, STAGES.test, "Collecting diff…");
+  const { diff, changedFiles } = getDiff(cwd, {
+    ...options,
+    maxDiffChars: config.reviewMaxDiffChars,
+  });
+  const sessionContext = getSessionContext(ctx);
+
+  progress(2, STAGES.test, "Loading project conventions…");
+  const conventions = loadConventions(cwd);
+  const conventionsText = conventions ? formatConventions(conventions) : "";
+
+  progress(3, STAGES.test, "Running tests…");
+  const testCommand = options.command ?? config.testCommand ?? detectTestCommand(cwd, conventions);
+  let testOutput: string;
+  if (testCommand) {
+    const results = runPreReviewCommands(cwd, [testCommand]);
+    testOutput = formatPreReviewOutput(results);
+  } else {
+    testOutput = "No test command was detected or configured. Falling back to static analysis of the diff.";
+  }
+
+  progress(4, STAGES.test, "Calculating token budget…");
+  const budget = calculateReviewBudget(
+    modelConfig.provider,
+    modelConfig.id,
+    config,
+    {
+      systemPrompt: "",
+      sessionContext,
+      conventionsText,
+      preReviewOutput: testOutput,
+      description,
+      memoryContext: "",
+    },
+    modelConfig,
+  );
+
+  progress(5, STAGES.test, "Loading changed file contents…");
+  const strategy = config.reviewStrategy ?? "auto";
+  const fullFileThresholdLines = config.reviewFullFileThresholdLines ?? 300;
+  const fileResult = loadFileContentsForReview({
+    cwd,
+    changedFiles,
+    budget,
+    strategy,
+    fullFileThresholdLines,
+  });
+  const fileContents = mapFileContentEntries(fileResult.entries);
+
+  const { system, user } = buildTestPrompt(description, diff, fileContents, testOutput, conventionsText);
+  const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
+    signal,
+    thinking: modelConfig.thinking,
+    cwd,
+    sessionManager: ctx.sessionManager,
+    task: "test",
+  });
+
+  const parsed = parseJsonResponse(raw);
+  const test = validateTestResult(parsed);
+  if (!test) {
+    logEvent(cwd, "warn", "Failed to parse test result from secondary model response", {
+      raw: raw.slice(0, 2000),
+      parsed: parsed === null ? null : typeof parsed,
+      parseError: getJsonParseError(raw),
+    });
+    return {
+      action: "test",
+      error: "Failed to parse test analysis from secondary model response.",
+      cost: recordCostWithBudget(cwd, usage),
+    };
+  }
+
+  return { action: "test", test, cost: recordCostWithBudget(cwd, usage) };
+}
+
+async function executeYooSecurity(
+  cwd: string,
+  description: string,
+  ctx: ExtensionContext,
+  options: {
+    files?: string[];
+    exclude?: string[];
+    revision?: string;
+    since?: string;
+    vcs?: "git" | "svn";
+    untracked?: boolean;
+    fullProject?: boolean;
+  } = {},
+  signal: AbortSignal | undefined,
+  progress: ProgressReporter,
+): Promise<YooToolResult> {
+  const config = loadHeyyooConfig(cwd);
+  const modelConfig = resolveTaskModel(config, "security");
+  if (!modelConfig.provider || !modelConfig.id) {
+    return { action: "security", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
+  }
+
+  const sessionContext = getSessionContext(ctx);
+  const conventions = loadConventions(cwd);
+  const conventionsText = conventions ? formatConventions(conventions) : "";
+
+  let diff: string;
+  let changedFiles: string[];
+
+  if (options.fullProject) {
+    progress(1, STAGES.security, "Collecting project files…");
+    const scanResult = conventions ? { conventions, files: conventions.entryPoints } : scanProjectConventions(cwd);
+    const samples = gatherDeepScanSamples(cwd, scanResult.files, 10);
+    changedFiles = samples.map((s) => s.file);
+    diff = `Project-wide security scan of ${changedFiles.length} sampled file(s).`;
+  } else {
+    progress(1, STAGES.security, "Collecting diff…");
+    const diffResult = getDiff(cwd, {
+      ...options,
+      maxDiffChars: config.reviewMaxDiffChars,
+    });
+    diff = diffResult.diff;
+    changedFiles = diffResult.changedFiles;
+  }
+
+  progress(2, STAGES.security, "Calculating token budget…");
+  const budget = calculateReviewBudget(
+    modelConfig.provider,
+    modelConfig.id,
+    config,
+    {
+      systemPrompt: "",
+      sessionContext,
+      conventionsText,
+      preReviewOutput: "",
+      description,
+      memoryContext: "",
+    },
+    modelConfig,
+  );
+
+  progress(3, STAGES.security, "Loading file contents…");
+  const strategy = config.reviewStrategy ?? "auto";
+  const fullFileThresholdLines = config.reviewFullFileThresholdLines ?? 300;
+  const fileResult = loadFileContentsForReview({
+    cwd,
+    changedFiles,
+    budget,
+    strategy,
+    fullFileThresholdLines,
+  });
+  const fileContents = mapFileContentEntries(fileResult.entries);
+
+  const { system, user } = buildSecurityPrompt(description, diff, fileContents, conventionsText);
+  const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
+    signal,
+    thinking: modelConfig.thinking,
+    cwd,
+    sessionManager: ctx.sessionManager,
+    task: "security",
+  });
+
+  const parsed = parseJsonResponse(raw);
+  const security = validateSecurityResult(parsed);
+  if (!security) {
+    logEvent(cwd, "warn", "Failed to parse security result from secondary model response", {
+      raw: raw.slice(0, 2000),
+      parsed: parsed === null ? null : typeof parsed,
+      parseError: getJsonParseError(raw),
+    });
+    return {
+      action: "security",
+      error: "Failed to parse security audit from secondary model response.",
+      cost: recordCostWithBudget(cwd, usage),
+    };
+  }
+
+  return { action: "security", security, cost: recordCostWithBudget(cwd, usage) };
+}
+
 async function executeYooSuggest(
   cwd: string,
   question: string,
@@ -1071,7 +1300,7 @@ interface InvalidParams {
 
 type ValidationResult = ValidatedParams | InvalidParams;
 
-const YOO_ACTIONS: YooAction[] = ["plan", "review", "suggest", "recommend", "judge", "scan"];
+const YOO_ACTIONS: YooAction[] = ["plan", "review", "suggest", "recommend", "judge", "scan", "test", "security"];
 
 function validateYooToolParams(params: unknown): ValidationResult {
   if (!params || typeof params !== "object") {
@@ -1088,7 +1317,7 @@ function validateYooToolParams(params: unknown): ValidationResult {
   if (active.length === 0) {
     return {
       ok: false,
-      error: "No action specified. Provide one of: plan, review, suggest, recommend, judge, or scan.",
+      error: "No action specified. Provide one of: plan, review, suggest, recommend, judge, scan, test, or security.",
     };
   }
   if (active.length > 1) {
@@ -1111,6 +1340,8 @@ function validateYooToolParams(params: unknown): ValidationResult {
     recommend: action === "recommend" ? (p.recommend as string) : undefined,
     judge: action === "judge" ? (p.judge as string) : undefined,
     scan: action === "scan" ? true : undefined,
+    test: action === "test" ? (p.test as string) : undefined,
+    security: action === "security" ? (p.security as string) : undefined,
     files: stringArray(p.files),
     exclude: stringArray(p.exclude),
     revision: typeof p.revision === "string" ? p.revision : undefined,
@@ -1201,6 +1432,49 @@ function parseReviewCommandArgs(input: string): {
   return { description: descriptionParts.join(" ") || "review changes", options };
 }
 
+function parseTestCommandArgs(input: string): {
+  description: string;
+  command?: string;
+  options: {
+    files?: string[];
+    exclude?: string[];
+    revision?: string;
+    since?: string;
+    vcs?: "git" | "svn";
+    untracked?: boolean;
+  };
+} {
+  const base = parseReviewCommandArgs(input);
+  const tokens = input.match(/(?:[^\s"']+|["'][^"']*["'])+/g) ?? [];
+  const args = tokens.map((t) => t.replace(/^["']|["']$/g, ""));
+  let command: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--command" || args[i] === "-c") && args[i + 1]) {
+      command = args[i + 1];
+      i++;
+    }
+  }
+  return { description: base.description, command, options: base.options };
+}
+
+function parseSecurityCommandArgs(input: string): {
+  description: string;
+  options: {
+    files?: string[];
+    exclude?: string[];
+    revision?: string;
+    since?: string;
+    vcs?: "git" | "svn";
+    untracked?: boolean;
+    fullProject?: boolean;
+  };
+} {
+  const base = parseReviewCommandArgs(input);
+  const tokens = input.match(/(?:[^\s"']+|["'][^"']*["'])+/g) ?? [];
+  const fullProject = tokens.some((t) => t === "--full-project" || t === "-fp");
+  return { description: base.description, options: { ...base.options, fullProject } };
+}
+
 export default function (pi: ExtensionAPI) {
   const loopStates = new Map<string, LoopDetectionState>();
   function getLoopState(cwd: string): LoopDetectionState {
@@ -1250,7 +1524,7 @@ export default function (pi: ExtensionAPI) {
     name: "yoo",
     label: "Yoo — Pair Programmer",
     description:
-      "Mandatory second-opinion workflow powered by a secondary model. Always use yoo.plan before implementing, yoo.review after every change, yoo.scan when opening a new project, yoo.suggest for non-trivial architectural or design questions, yoo.recommend when deciding next steps, and yoo.judge before declaring work complete.",
+      "Mandatory second-opinion workflow powered by a secondary model. Always use yoo.plan before implementing, yoo.review after every change, yoo.scan when opening a new project, yoo.suggest for non-trivial architectural or design questions, yoo.recommend when deciding next steps, and yoo.judge before declaring work complete. Optionally use yoo.test to check test coverage and failures, and yoo.security to audit for vulnerabilities.",
     promptSnippet:
       "yoo: always get a second opinion from the secondary model before acting on code or making architectural decisions",
     promptGuidelines: [
@@ -1261,12 +1535,14 @@ export default function (pi: ExtensionAPI) {
       "Use yoo with suggest:true whenever you are uncertain about the best approach for a specific technical question. If you are stuck, looping, or about to ask the user for help, call yoo.suggest first.",
       "When the user asks a non-trivial architectural or design question where multiple valid approaches exist, call yoo.suggest before answering. For simple factual questions you can verify yourself (reading files, running commands), answer directly without yoo.",
       "Use yoo with recommend:true whenever you need to decide what step to take next. If you have spent more than one turn without clear progress, call yoo.recommend.",
+      "Use yoo with test:true when you want a dedicated check for missing tests, failing tests, or low test quality. This is optional; yoo.review already catches many quality issues.",
+      "Use yoo with security:true when the change involves auth, input handling, secrets, dependencies, or any security-sensitive area. Pass a description of the function or API to audit and scope it with files:[...] if needed.",
       "Use yoo with judge:true after completing all work for a final holistic review against the original plan.",
       "Enable autoJudge in settings.json to automatically run judge when the last plan step passes review.",
       "Configure preReviewCommands in settings.json to run lint/test/typecheck before each review and include output in the prompt.",
       "Use `verify: true` when a yoo finding is surprising, high-stakes, or unclear. The main agent must then confirm or refute the finding with evidence before acting.",
       "The secondary model should be a DIFFERENT model family than the main model to catch blind spots. Configure in settings.json under pi-heyyoo.secondary.",
-      "Only one action (plan/review/suggest/recommend/judge/scan) per call. Do not combine them.",
+      "Only one action (plan/review/suggest/recommend/judge/scan/test/security) per call. Do not combine them.",
       "When stuck, confused, or looping, stop and use a yoo tool. Do not spin in place or guess.",
     ],
     parameters: Type.Object({
@@ -1302,6 +1578,17 @@ export default function (pi: ExtensionAPI) {
         Type.Boolean({
           description:
             "If true, scan project conventions and architecture patterns. Stores results for future reviews.",
+        }),
+      ),
+      test: Type.Optional(
+        Type.String({
+          description: "Provide a description of the change to analyze test coverage, failing tests, and test quality.",
+        }),
+      ),
+      security: Type.Optional(
+        Type.String({
+          description:
+            "Provide a description of the change to audit it for security issues such as secrets, injection, and auth flaws.",
         }),
       ),
       files: Type.Optional(
@@ -1384,6 +1671,38 @@ export default function (pi: ExtensionAPI) {
           result = await executeYooRecommend(ctx.cwd, p.recommend, signal, progress, ctx.sessionManager);
         } else if (p.judge) {
           result = await executeYooJudge(ctx.cwd, p.judge, signal, progress, ctx.sessionManager);
+        } else if (p.test) {
+          result = await executeYooTest(
+            ctx.cwd,
+            p.test,
+            ctx,
+            {
+              files: p.files,
+              exclude: p.exclude,
+              revision: p.revision,
+              since: p.since,
+              vcs: p.vcs,
+              untracked: p.untracked,
+            },
+            signal,
+            progress,
+          );
+        } else if (p.security) {
+          result = await executeYooSecurity(
+            ctx.cwd,
+            p.security,
+            ctx,
+            {
+              files: p.files,
+              exclude: p.exclude,
+              revision: p.revision,
+              since: p.since,
+              vcs: p.vcs,
+              untracked: p.untracked,
+            },
+            signal,
+            progress,
+          );
         } else {
           result = await executeYooScan(ctx.cwd, signal, progress, ctx.sessionManager);
         }
@@ -1413,7 +1732,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("yoo", {
     description:
-      "Run a yoo action or show status. Usage: /yoo [plan|review|suggest|recommend|judge|scan|status] [args]",
+      "Run a yoo action or show status. Usage: /yoo [plan|review|suggest|recommend|judge|scan|test|security|status] [args]",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed) {
@@ -1432,6 +1751,8 @@ export default function (pi: ExtensionAPI) {
         recommend: "recommend",
         judge: "judge",
         scan: "scan",
+        test: "test",
+        security: "security",
         status: "status",
       };
       const known = actionMap[subcommand.toLowerCase()];
@@ -1488,6 +1809,30 @@ export default function (pi: ExtensionAPI) {
           case "scan":
             result = await executeYooScan(ctx.cwd, signal, notifyProgress, ctx.sessionManager);
             break;
+          case "test": {
+            const { description, command, options: testOptions } = parseTestCommandArgs(restText);
+            result = await executeYooTest(
+              ctx.cwd,
+              description || "review test coverage",
+              ctx,
+              { ...testOptions, command },
+              signal,
+              notifyProgress,
+            );
+            break;
+          }
+          case "security": {
+            const { description, options: securityOptions } = parseSecurityCommandArgs(restText);
+            result = await executeYooSecurity(
+              ctx.cwd,
+              description || "security audit",
+              ctx,
+              securityOptions,
+              signal,
+              notifyProgress,
+            );
+            break;
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -2482,6 +2827,68 @@ function formatResultText(result: YooToolResult): string {
       for (const a of result.recommend.alternatives) {
         lines.push(`- ${a}`);
       }
+    }
+  }
+
+  if (result.test) {
+    const icon = result.test.verdict === "pass" ? "✓" : result.test.verdict === "blocked" ? "✗" : "⚠";
+    lines.push(`## yoo test ${icon} ${result.test.verdict}`);
+    lines.push("");
+    lines.push(result.test.summary);
+    lines.push("");
+
+    if (result.test.missingTests.length > 0) {
+      lines.push("### Missing tests");
+      for (const item of result.test.missingTests) {
+        const loc = item.file ? `\`${item.file}\`` : "general";
+        lines.push(`- ${loc}: ${item.reason}`);
+      }
+      lines.push("");
+    }
+
+    if (result.test.findings.length > 0) {
+      lines.push("### Findings");
+      for (const finding of result.test.findings) {
+        const loc = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\`` : "unknown";
+        const category = finding.category ? ` · ${finding.category}` : "";
+        lines.push(`- ${issueEmoji(finding.severity)} **${finding.severity}**${category} ${loc}: ${finding.issue}`);
+        if (finding.suggestion) lines.push(`  → ${finding.suggestion}`);
+      }
+      lines.push("");
+    }
+
+    if (result.test.verdict === "pass" && result.test.findings.length === 0 && result.test.missingTests.length === 0) {
+      lines.push("**Tests look good.**");
+    }
+  }
+
+  if (result.security) {
+    const icon = result.security.verdict === "pass" ? "✓" : "⚠";
+    lines.push(`## yoo security ${icon} ${result.security.verdict}`);
+    lines.push("");
+    lines.push(result.security.summary);
+    lines.push("");
+
+    if (result.security.findings.length > 0) {
+      lines.push("### Findings");
+      for (const finding of result.security.findings) {
+        const loc = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\`` : "unknown";
+        const emoji =
+          finding.severity === "critical"
+            ? "🔴"
+            : finding.severity === "high"
+              ? "🟠"
+              : finding.severity === "medium"
+                ? "🟡"
+                : "💡";
+        lines.push(`- ${emoji} **${finding.severity}** · ${finding.category} ${loc}: ${finding.issue}`);
+        if (finding.suggestion) lines.push(`  → ${finding.suggestion}`);
+      }
+      lines.push("");
+    }
+
+    if (result.security.verdict === "pass") {
+      lines.push("**No significant security issues found.**");
     }
   }
 
