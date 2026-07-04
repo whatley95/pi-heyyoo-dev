@@ -61,4 +61,36 @@ describe("diff-grabber helpers", () => {
     const byFile = splitDiffByFile("", "git");
     assert.deepEqual(Object.keys(byFile), []);
   });
+
+  it("parses quoted git paths with spaces", () => {
+    const diff = 'diff --git "a/path with spaces.ts" "b/path with spaces.ts"\n+change';
+    assert.deepEqual(extractChangedFiles(diff, "git"), ["path with spaces.ts"]);
+    const byFile = splitDiffByFile(diff, "git");
+    assert.ok(byFile["path with spaces.ts"]?.includes("+change"));
+  });
+
+  it("parses combined merge diff headers", () => {
+    const diff = "diff --cc src/merged.ts\n+change";
+    assert.deepEqual(extractChangedFiles(diff, "git"), ["src/merged.ts"]);
+    const byFile = splitDiffByFile(diff, "git");
+    assert.ok(byFile["src/merged.ts"]?.includes("+change"));
+  });
+
+  it("does not exclude prefix-matching SVN blocks", () => {
+    const diff = [
+      "Index: src/a.ts",
+      "===================================================================",
+      "--- src/a.ts",
+      "+++ src/a.ts",
+      "change a",
+      "Index: src/a.ts.bak",
+      "===================================================================",
+      "--- src/a.ts.bak",
+      "+++ src/a.ts.bak",
+      "change backup",
+    ].join("\n");
+    const filtered = applyExclude(diff, ["src/a.ts"]);
+    assert.doesNotMatch(filtered, /change a/);
+    assert.match(filtered, /change backup/);
+  });
 });

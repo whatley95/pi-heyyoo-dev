@@ -60,4 +60,52 @@ describe("convention inference", () => {
     const samples = gatherDeepScanSamples(cwd, ["src/a.ts", "src/b.ts", "src/c.ts"], 2);
     assert.equal(samples.length, 2);
   });
+
+  it("excludes test directories and declaration files from deep scan source samples", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-heyyoo-deep-scan-filter-"));
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    mkdirSync(join(cwd, "tests"), { recursive: true });
+    writeFileSync(join(cwd, "src/app.ts"), "export const app = 1;\n", "utf-8");
+    writeFileSync(join(cwd, "src/types.d.ts"), "export type T = string;\n", "utf-8");
+    writeFileSync(join(cwd, "tests/setup.ts"), "export const setup = 1;\n", "utf-8");
+
+    const samples = gatherDeepScanSamples(
+      cwd,
+      ["src/app.ts", "src/types.d.ts", "tests/setup.ts", "src/app.test.ts"],
+      5,
+    );
+    const files = samples.map((s) => s.file);
+    assert.ok(files.includes("src/app.ts"));
+    assert.ok(!files.includes("src/types.d.ts"));
+    assert.ok(!files.includes("tests/setup.ts"));
+  });
+
+  it("does not sample entry points outside the project root", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-heyyoo-deep-scan-entry-"));
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(join(cwd, "package.json"), JSON.stringify({ main: "../outside.ts" }), "utf-8");
+    writeFileSync(join(cwd, "src/index.ts"), "export const x = 1;\n", "utf-8");
+
+    const samples = gatherDeepScanSamples(cwd, ["src/index.ts"], 5);
+    const files = samples.map((s) => s.file);
+    assert.ok(!files.includes("../outside.ts"));
+    assert.ok(files.includes("src/index.ts"));
+  });
+
+  it("reads nested package.json exports as entry points", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-heyyoo-deep-scan-exports-"));
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(
+      join(cwd, "package.json"),
+      JSON.stringify({ exports: { ".": { import: "./src/index.mjs", require: "./src/index.cjs" } } }),
+      "utf-8",
+    );
+    writeFileSync(join(cwd, "src/index.mjs"), "export const x = 1;\n", "utf-8");
+    writeFileSync(join(cwd, "src/index.cjs"), "exports.x = 1;\n", "utf-8");
+
+    const samples = gatherDeepScanSamples(cwd, ["src/index.mjs", "src/index.cjs"], 5);
+    const files = samples.map((s) => s.file);
+    assert.ok(files.includes("src/index.mjs"));
+    assert.ok(files.includes("src/index.cjs"));
+  });
 });

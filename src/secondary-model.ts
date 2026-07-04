@@ -437,6 +437,16 @@ async function callPiBackend(
   const { signal, thinking, cwd, sessionManager, relevantPaths } = options;
 
   const inheritedSession = buildInheritedSessionJsonl(sessionManager, relevantPaths);
+  if (cwd) {
+    const inheritedLines = inheritedSession ? inheritedSession.split("\n").filter(Boolean) : [];
+    const inheritedEntries = Math.max(0, inheritedLines.length - 1); // header line is not a conversation entry
+    logEvent(cwd, "info", "Pi session inheritance prepared", {
+      inheritedEntries,
+      relevantPathsCount: relevantPaths?.length ?? 0,
+      provider,
+      model,
+    });
+  }
   const taskJsonl =
     [
       JSON.stringify({

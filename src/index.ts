@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "./pi-paths.js";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
@@ -464,6 +464,15 @@ async function executeYooReview(
       review.suggestions.unshift(`Review failed for ${failures.length} file(s): ${failures.join("; ")}`);
       review.consensus = false;
     }
+
+    logEvent(cwd, "info", "Parallel review completed", {
+      fileCount: preps.length,
+      successCount: successes.length,
+      failureCount: failures.length,
+      provider: modelConfig.provider,
+      model: modelConfig.id,
+      estimatedCostUsd: cost?.estimatedCostUsd,
+    });
   } else {
     const fileResult =
       strategy === "diff-only"
@@ -839,6 +848,15 @@ async function executeYooScan(
   const conventions = llmConventions ? mergeConventions(localScan.conventions, llmConventions) : localScan.conventions;
   progress(4, STAGES.scan, "Saving conventions…");
   saveConventions(cwd, conventions);
+
+  logEvent(cwd, "info", "Scan completed", {
+    deepScan: Boolean(deepScanEnabled),
+    sampleCount: trimmedSamples.length,
+    filesForPrompt: filesForPrompt.length,
+    provider: modelConfig.provider,
+    model: modelConfig.id,
+    estimatedCostUsd: usage.estimatedCostUsd,
+  });
 
   return { action: "scan", scan: { conventions, files: localScan.files }, cost: recordCostWithBudget(cwd, usage) };
 }
@@ -1486,30 +1504,165 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yoo-config", {
-    description: "Configure secondary model for yoo pair-programmer",
+    description:
+      "View or edit pi-heyyoo settings. Usage: /yoo-config [get|set|list] [key] [value], or /yoo-config <provider.model>",
     handler: async (args, ctx) => {
-      const settingsPath = join(getAgentDir(), "settings.json");
+      const agentDir = getAgentDir();
+      const settingsPath = join(agentDir, "settings.json");
       const trimmed = args.trim();
-      if (!trimmed) {
-        ctx.ui.notify(`Edit ${settingsPath} and set pi-heyyoo.secondary.provider and pi-heyyoo.secondary.id`, "info");
-        return;
+
+      function readSettings(): Record<string, unknown> {
+        if (!existsSync(settingsPath)) return {};
+        try {
+          return JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+        } catch (err) {
+          logEvent(ctx.cwd, "error", "Failed to read settings for /yoo-config", {
+            error: err instanceof Error ? err.message : String(err),
+            path: settingsPath,
+          });
+          throw new Error("Failed to read settings.json.", { cause: err });
+        }
       }
 
-      const [provider, ...modelParts] = trimmed.split(/\.|\s+/);
-      const modelId = modelParts.join(".");
-      if (!provider || !modelId) {
-        ctx.ui.notify(`Usage: /yoo-config <provider.model> (e.g. /yoo-config openai.gpt-4o)`, "warn");
-        return;
+      function writeSettings(settings: Record<string, unknown>): void {
+        if (!existsSync(agentDir)) mkdirSync(agentDir, { recursive: true });
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
       }
+
+      function getYooSettings(settings: Record<string, unknown>): Record<string, unknown> {
+        const yoo = settings["pi-heyyoo"];
+        return yoo && typeof yoo === "object" && !Array.isArray(yoo) ? (yoo as Record<string, unknown>) : {};
+      }
+
+      function setValueByPath(obj: Record<string, unknown>, path: string, value: unknown): void {
+        const parts = path.split(".");
+        let current: Record<string, unknown> = obj;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const key = parts[i];
+          const next = current[key];
+          if (!next || typeof next !== "object" || Array.isArray(next)) {
+            current[key] = {};
+          }
+          current = current[key] as Record<string, unknown>;
+        }
+        current[parts[parts.length - 1]] = value;
+      }
+
+      function getValueByPath(obj: Record<string, unknown>, path: string): unknown {
+        const parts = path.split(".");
+        let current: unknown = obj;
+        for (const part of parts) {
+          if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+          current = (current as Record<string, unknown>)[part];
+        }
+        return current;
+      }
+
+      function parseConfigValue(raw: string): unknown {
+        const stripped = raw.trim();
+        if (/^".*"$/.test(stripped)) return stripped.slice(1, -1);
+        if (/^'.*'$/.test(stripped)) return stripped.slice(1, -1);
+        if (stripped.toLowerCase() === "true" || stripped.toLowerCase() === "yes") return true;
+        if (stripped.toLowerCase() === "false" || stripped.toLowerCase() === "no") return false;
+        if (stripped === "null") return null;
+        if (stripped === "undefined") return undefined;
+        const num = Number(stripped);
+        if (stripped !== "" && !Number.isNaN(num) && Number.isFinite(num)) return num;
+        try {
+          return JSON.parse(stripped);
+        } catch {
+          return stripped;
+        }
+      }
+
+      function tokenize(input: string): string[] {
+        const tokens: string[] = [];
+        const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(input)) !== null) {
+          tokens.push(match[1] ?? match[2] ?? match[0]);
+        }
+        return tokens;
+      }
+
+      // Legacy shorthand: /yoo-config provider.model
+      if (trimmed && !trimmed.includes(" ") && trimmed.includes(".")) {
+        const [provider, ...modelParts] = trimmed.split(".");
+        const modelId = modelParts.join(".");
+        if (provider && modelId) {
+          try {
+            const settings = readSettings();
+            settings["pi-heyyoo"] = settings["pi-heyyoo"] || {};
+            const yoo = getYooSettings(settings);
+            yoo.secondary = (yoo.secondary as Record<string, unknown>) || {};
+            (yoo.secondary as Record<string, unknown>).provider = provider;
+            (yoo.secondary as Record<string, unknown>).id = modelId;
+            settings["pi-heyyoo"] = yoo;
+            writeSettings(settings);
+            ctx.ui.notify(`Set yoo secondary model to ${provider}.${modelId} in ${settingsPath}`, "info");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Failed to update settings: ${message}`, "error");
+          }
+          return;
+        }
+      }
+
+      const tokens = tokenize(trimmed);
+      const subcommand = tokens[0]?.toLowerCase() ?? "";
 
       try {
-        const existing = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf-8")) : {};
-        existing["pi-heyyoo"] = existing["pi-heyyoo"] || {};
-        existing["pi-heyyoo"].secondary = existing["pi-heyyoo"].secondary || {};
-        existing["pi-heyyoo"].secondary.provider = provider;
-        existing["pi-heyyoo"].secondary.id = modelId;
-        writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
-        ctx.ui.notify(`Set yoo secondary model to ${provider}.${modelId} in ${settingsPath}`, "info");
+        if (!trimmed || subcommand === "list") {
+          const settings = readSettings();
+          const yoo = getYooSettings(settings);
+          const lines = [
+            `Settings file: ${settingsPath}`,
+            "",
+            JSON.stringify(yoo, null, 2) || "(no pi-heyyoo settings configured)",
+          ];
+          await ctx.ui.select("pi-heyyoo settings", lines);
+          return;
+        }
+
+        if (subcommand === "get") {
+          const key = tokens[1];
+          if (!key) {
+            ctx.ui.notify("Usage: /yoo-config get <key> (e.g. /yoo-config get secondary.thinking)", "warn");
+            return;
+          }
+          const settings = readSettings();
+          const yoo = getYooSettings(settings);
+          const value = getValueByPath(yoo, key);
+          const display = value === undefined ? "(not set)" : JSON.stringify(value, null, 2);
+          ctx.ui.notify(`${key} = ${display}`, "info");
+          return;
+        }
+
+        if (subcommand === "set") {
+          const key = tokens[1];
+          const valueText = tokens.slice(2).join(" ");
+          if (!key || valueText.length === 0) {
+            ctx.ui.notify(
+              "Usage: /yoo-config set <key> <value> (e.g. /yoo-config set secondary.thinking medium)",
+              "warn",
+            );
+            return;
+          }
+          const value = parseConfigValue(valueText);
+          const settings = readSettings();
+          settings["pi-heyyoo"] = settings["pi-heyyoo"] || {};
+          const yoo = getYooSettings(settings);
+          setValueByPath(yoo, key, value);
+          settings["pi-heyyoo"] = yoo;
+          writeSettings(settings);
+          ctx.ui.notify(`Set ${key} = ${JSON.stringify(value)} in ${settingsPath}`, "info");
+          return;
+        }
+
+        ctx.ui.notify(
+          "Unknown /yoo-config subcommand. Usage: /yoo-config [get|set|list] [key] [value], or /yoo-config <provider.model>",
+          "warn",
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         ctx.ui.notify(`Failed to update settings: ${message}`, "error");
@@ -1518,7 +1671,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yoo-model", {
-    description: "Interactively pick the secondary model for yoo",
+    description: "Interactively pick the secondary model for yoo, optionally per tool",
     handler: async (_args, ctx) => {
       try {
         const registry = ctx.modelRegistry as unknown as {
@@ -1572,9 +1725,9 @@ export default function (pi: ExtensionAPI) {
           .filter((m) => m.provider === provider)
           .sort((a, b) => a.id.localeCompare(b.id));
         const currentConfig = loadHeyyooConfig(ctx.cwd);
-        const isCurrent = currentConfig.secondary.provider === provider && currentConfig.secondary.id;
+        const isCurrentBase = currentConfig.secondary.provider === provider && currentConfig.secondary.id.length > 0;
         const modelItems = providerModels.map((m) => {
-          const marker = isCurrent && m.id === currentConfig.secondary.id ? " ✓ current" : "";
+          const marker = isCurrentBase && m.id === currentConfig.secondary.id ? " ✓ current" : "";
           return `${m.id}${marker}`;
         });
 
@@ -1586,16 +1739,30 @@ export default function (pi: ExtensionAPI) {
         const currentThinking = currentConfig.secondary.thinking ?? "xhigh";
         const thinkingItems = thinkingLevels.map(
           (t) =>
-            `${t}${t === currentThinking && isCurrent && currentConfig.secondary.id === modelId ? " ✓ current" : ""}`,
+            `${t}${t === currentThinking && isCurrentBase && currentConfig.secondary.id === modelId ? " ✓ current" : ""}`,
         );
         const thinkingPicked = await ctx.ui.select("Pick thinking level:", thinkingItems);
         if (!thinkingPicked) return;
         const thinking = thinkingPicked.replace(" ✓ current", "");
 
+        const scopeOptions = ["Base secondary model", ...YOO_ACTIONS.map((a) => `Use for ${a} only`)];
+        const currentActionScope = YOO_ACTIONS.find((a) => {
+          const override = currentConfig.taskModels?.[a];
+          return override?.provider === provider && override?.id === modelId && override?.thinking === thinking;
+        });
+        const currentScope = isCurrentBase
+          ? "Base secondary model"
+          : currentActionScope
+            ? `Use for ${currentActionScope} only`
+            : undefined;
+        const scopeItems = scopeOptions.map((s) => `${s}${s === currentScope ? " ✓ current" : ""}`);
+        const scopePicked = await ctx.ui.select("Apply model to:", scopeItems);
+        if (!scopePicked) return;
+        const scope = scopePicked.replace(/ ✓ current$/, "");
+
         const agentDir = getAgentDir();
         const settingsPath = join(agentDir, "settings.json");
         if (!existsSync(agentDir)) {
-          const { mkdirSync } = await import("node:fs");
           mkdirSync(agentDir, { recursive: true });
         }
         let settings: Record<string, unknown> = {};
@@ -1603,14 +1770,20 @@ export default function (pi: ExtensionAPI) {
           settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
         }
         if (!settings["pi-heyyoo"]) settings["pi-heyyoo"] = {};
-        (settings["pi-heyyoo"] as Record<string, unknown>).secondary = {
-          provider,
-          id: modelId,
-          thinking,
-        };
-        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+        const yooSettings = settings["pi-heyyoo"] as Record<string, unknown>;
 
-        ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}).`, "info");
+        if (scope === "Base secondary model") {
+          yooSettings.secondary = { provider, id: modelId, thinking };
+          ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}).`, "info");
+        } else {
+          const action = scope.replace(/^Use for /, "").replace(/ only$/, "") as YooAction;
+          const taskModels = (yooSettings.taskModels as Record<string, unknown>) || {};
+          taskModels[action] = { provider, id: modelId, thinking };
+          yooSettings.taskModels = taskModels;
+          ctx.ui.notify(`Task model for ${action} set to ${provider}:${modelId} (${thinking}).`, "info");
+        }
+
+        writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
       } catch (err) {
         ctx.ui.notify(`yoo-model failed: ${err instanceof Error ? err.message : String(err)}`, "error");
       }

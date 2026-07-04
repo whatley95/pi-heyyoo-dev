@@ -50,4 +50,44 @@ describe("resolveTaskModel", () => {
     assert.equal(result.provider, "openai");
     assert.equal(result.id, "gpt-4o-mini");
   });
+
+  it("applies task-level contextWindow and maxOutputTokens", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { review: { contextWindow: 128000, maxOutputTokens: 4096 } },
+    };
+    const result = resolveTaskModel(config, "review");
+    assert.equal(result.contextWindow, 128000);
+    assert.equal(result.maxOutputTokens, 4096);
+    assert.equal(result.provider, "openai");
+  });
+
+  it("ignores empty override strings and falls back to base", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { review: { provider: "", id: "" } },
+    };
+    const result = resolveTaskModel(config, "review");
+    assert.equal(result.provider, "openai");
+    assert.equal(result.id, "gpt-4o-mini");
+  });
+
+  it("ignores invalid taskModel action keys", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { revieww: { provider: "anthropic", id: "claude" } } as unknown as HeyyooConfig["taskModels"],
+    };
+    const result = resolveTaskModel(config, "review");
+    assert.equal(result.provider, "openai");
+  });
+
+  it("ignores non-finite numeric overrides", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { review: { contextWindow: NaN, maxOutputTokens: Infinity } },
+    } as unknown as HeyyooConfig;
+    const result = resolveTaskModel(config, "review");
+    assert.equal(result.contextWindow, undefined);
+    assert.equal(result.maxOutputTokens, undefined);
+  });
 });

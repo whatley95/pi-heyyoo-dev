@@ -89,6 +89,42 @@ describe("file-loader", () => {
     assert.equal(result.dropped.includes("../outside.ts"), true);
   });
 
+  it("deduplicates repeated file paths", () => {
+    const result = loadFileContentsForReview({
+      cwd,
+      changedFiles: ["src/small.ts", "src/small.ts"],
+      budget,
+      strategy: "auto",
+      fullFileThresholdLines: 300,
+    });
+    assert.equal(result.entries.length, 1);
+  });
+
+  it("counts lines correctly when file ends with a newline", () => {
+    writeFileSync(join(cwd, "src/exact.ts"), "line1\nline2\nline3\n");
+    const result = loadFileContentsForReview({
+      cwd,
+      changedFiles: ["src/exact.ts"],
+      budget,
+      strategy: "auto",
+      fullFileThresholdLines: 3,
+    });
+    assert.equal(result.entries[0].lineCount, 3);
+    assert.equal(result.entries[0].mode, "full");
+  });
+
+  it("does not fall back to outlines in full-files strategy", () => {
+    const result = loadFileContentsForReview({
+      cwd,
+      changedFiles: ["src/large.ts"],
+      budget: { ...budget, availableInputTokens: 100 },
+      strategy: "full-files",
+      fullFileThresholdLines: 300,
+    });
+    assert.equal(result.entries.length, 0);
+    assert.ok(result.dropped.includes("src/large.ts"));
+  });
+
   it("cleans up temp dir", () => {
     rmSync(cwd, { recursive: true, force: true });
     assert.ok(true);

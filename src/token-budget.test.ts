@@ -43,4 +43,23 @@ describe("token budget", () => {
     });
     assert.equal(budget.hardInputCap, 1000);
   });
+
+  it("uses per-task model overrides for context window and output tokens", () => {
+    const budget = calculateReviewBudget(
+      "openai",
+      "gpt-4o",
+      baseConfig,
+      {
+        systemPrompt: "",
+        sessionContext: "",
+        conventionsText: "",
+        preReviewOutput: "",
+        description: "",
+        memoryContext: "",
+      },
+      { contextWindow: 32_000, maxOutputTokens: 4096, thinking: "xhigh" },
+    );
+    assert.equal(budget.contextWindow, 32_000);
+    assert.equal(budget.reservedOutputTokens, 4096);
+  });
 });

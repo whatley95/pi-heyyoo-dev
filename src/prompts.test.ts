@@ -8,6 +8,8 @@ import {
   buildPlanPrompt,
   buildAdaptiveReviewPrompt,
   buildScanPrompt,
+  buildRecommendPrompt,
+  clearPromptCache,
 } from "./prompts.js";
 
 describe("parseJsonResponse", () => {
@@ -208,6 +210,40 @@ describe("prompt caching", () => {
     const b = buildScanPrompt();
     assert.equal(a.system, b.system);
     assert.notStrictEqual(a, b);
+  });
+
+  it("does not cache prompts larger than the size cap", () => {
+    const bigConventions = "x".repeat(60_000);
+    const a = buildPlanPrompt("task", bigConventions);
+    a.system = "mutated";
+    const b = buildPlanPrompt("task", bigConventions);
+    assert.notEqual(b.system, "mutated");
+  });
+
+  it("survives non-serializable arguments by bypassing the cache", () => {
+    const circular: unknown[] = [];
+    circular.push(circular);
+    // buildRecommendPrompt expects string[]; cast the circular array to exercise the JSON.stringify guard.
+    const a = buildRecommendPrompt("situation", circular as string[]);
+    assert.ok(a.user.includes("situation"));
+  });
+
+  it("evicts oldest cached entries after maxEntries", () => {
+    const first = buildPlanPrompt("task-0", "conventions");
+    first.system = "mutated";
+    for (let i = 1; i < 60; i++) {
+      buildPlanPrompt(`task-${i}`, "conventions");
+    }
+    const recalled = buildPlanPrompt("task-0", "conventions");
+    assert.notEqual(recalled.system, "mutated");
+  });
+
+  it("clears the cache via clearPromptCache", () => {
+    const a = buildPlanPrompt("task", "conventions");
+    a.system = "mutated";
+    clearPromptCache();
+    const b = buildPlanPrompt("task", "conventions");
+    assert.notEqual(b.system, "mutated");
   });
 });
 
