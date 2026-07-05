@@ -101,7 +101,7 @@ function getExcludedScanDirs(): Set<string> {
   return new Set([...BASE_EXCLUDED_SCAN_DIRS, getConfigDirName()]);
 }
 
-function listTrackedFiles(cwd: string): string[] {
+export function listTrackedFiles(cwd: string): string[] {
   if (existsSync(join(cwd, ".git"))) {
     try {
       const output = execFileSync("git", ["ls-files"], {

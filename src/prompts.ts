@@ -9,7 +9,9 @@ import type {
   Conventions,
   TestResult,
   SecurityResult,
+  PlanTodoItem,
 } from "./types.js";
+import { planStepDescription } from "./types.js";
 import {
   PlanResultSchema,
   ReviewResultSchema,
@@ -34,12 +36,19 @@ You are creating a structured plan for the developer. Break the task into an act
 Return ONLY a JSON object with this exact structure — no extra text, no markdown fences:
 {
   "summary": "one-sentence summary of the overall plan",
-  "todo": ["step 1", "step 2", "step 3"],
+  "todo": [
+    { "description": "step 1", "priority": "high", "dependsOn": [] },
+    { "description": "step 2", "priority": "medium", "dependsOn": [1] },
+    "step 3"
+  ],
   "acceptanceCriteria": ["criterion 1: when X happens Y should occur", "criterion 2: ..."]
 }
 
 Rules:
 - todo items must be concrete, verifiable, and ordered (what to do, not how to think about it)
+- Use objects when priorities or dependencies matter; plain strings are also accepted
+- priority must be one of: high, medium, low. Omit when unclear.
+- dependsOn is a 1-based list of earlier step numbers this step cannot start until after
 - acceptance criteria must be testable (specific checks, not vague goals)
 - Each todo item should be one small unit of work — the main agent should complete it in 1-2 turns
 - Maximum 5-8 todo items
@@ -258,11 +267,13 @@ Rules:
 
 function buildRecommendPromptImpl(
   situation: string,
-  planTodo?: string[],
+  planTodo?: PlanTodoItem[],
   conventions?: string,
 ): { system: string; user: string } {
   const planContext = planTodo?.length
-    ? `\n\nCurrent plan (check items already done):\n${planTodo.map((t, i) => `${i + 1}. ${t}`).join("\n")}`
+    ? `\n\nCurrent plan (check items already done):\n${planTodo
+        .map((t, i) => `${i + 1}. ${planStepDescription(t)}`)
+        .join("\n")}`
     : "";
 
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
@@ -376,7 +387,7 @@ Rules:
 
 function buildJudgePromptImpl(
   description: string,
-  planTodo?: string[],
+  planTodo?: PlanTodoItem[],
   acceptanceCriteria?: string[],
   reviewHistory?: string,
   conventions?: string,
@@ -384,7 +395,7 @@ function buildJudgePromptImpl(
   memoryContext?: string,
 ): { system: string; user: string } {
   const planBlock = planTodo?.length
-    ? `\n\nOriginal plan:\n${planTodo.map((t, i) => `${i + 1}. ${t}`).join("\n")}`
+    ? `\n\nOriginal plan:\n${planTodo.map((t, i) => `${i + 1}. ${planStepDescription(t)}`).join("\n")}`
     : "";
 
   const criteriaBlock = acceptanceCriteria?.length
@@ -432,7 +443,40 @@ Rules:
   };
 }
 
+function buildExplainPromptImpl(
+  target: string,
+  context?: string,
+  conventions?: string,
+  indexSummary?: string,
+  fileContents?: Array<{ file: string; content: string }>,
+): { system: string; user: string } {
+  const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const indexBlock = indexSummary ? `\n\n<project_index>\n${indexSummary}\n</project_index>` : "";
+  const contextBlock = context ? `\n\n<context>\n${context}\n</context>` : "";
+  const filesBlock =
+    fileContents && fileContents.length > 0
+      ? `\n\n<file_contents>\n${fileContents.map((f) => `--- ${f.file} ---\n${f.content}`).join("\n\n")}\n</file_contents>`
+      : "";
+
+  return {
+    system: `${PAIR_PROGRAMMER_PERSONA}
+
+Explain the provided code, error, diff, or file to the developer. Be concise but complete. Assume they are a senior engineer who wants to understand what is happening and why.
+
+Rules:
+- Start with a one-sentence summary
+- Break down the important parts clearly
+- If this is an error, explain the root cause and how to fix it
+- If this is code, explain the intent, inputs, outputs, and any non-obvious behavior
+- Reference specific files, functions, or line numbers when available
+- Do NOT include commentary outside the explanation`,
+
+    user: `Explain this:\n\n${target}${contextBlock}${conventionsBlock}${indexBlock}${filesBlock}`,
+  };
+}
+
 export const buildPlanPrompt = memoizePromptBuilder(buildPlanPromptImpl);
+export const buildExplainPrompt = memoizePromptBuilder(buildExplainPromptImpl);
 // Review prompts include large, highly-dynamic diffs and file contents, so caching them
 // adds memory pressure and key-serialization cost for near-zero hit rates.
 export const buildAdaptiveReviewPrompt = buildAdaptiveReviewPromptImpl;

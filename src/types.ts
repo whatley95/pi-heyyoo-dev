@@ -1,5 +1,8 @@
 export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | "scan" | "test" | "security";
 
+/** Tasks that can have a per-model override in settings.json. Includes yoo tool actions plus separate tools like explain. */
+export type YooModelTask = YooAction | "explain";
+
 export interface SecondaryModelConfig {
   provider: string;
   id: string;
@@ -23,7 +26,7 @@ export interface SecondaryModelConfig {
 export interface HeyyooConfig {
   secondary: SecondaryModelConfig;
   /** Per-task model overrides. Any omitted field falls back to `secondary`. */
-  taskModels?: Partial<Record<YooAction, Partial<SecondaryModelConfig>>>;
+  taskModels?: Partial<Record<YooModelTask, Partial<SecondaryModelConfig>>>;
   autoJudge?: boolean;
   preReviewCommands?: string[];
   /** Custom command to run for yoo.test analysis (e.g. "npm test"). If omitted, yoo.test will auto-detect or fall back to static diff analysis. */
@@ -42,10 +45,26 @@ export interface HeyyooConfig {
   modelInfo?: Record<string, { contextWindow?: number; maxOutputTokens?: number }>;
 }
 
+export interface PlanStep {
+  description: string;
+  priority?: "high" | "medium" | "low";
+  dependsOn?: number[];
+}
+
+export type PlanTodoItem = string | PlanStep;
+
 export interface PlanResult {
-  todo: string[];
+  todo: PlanTodoItem[];
   acceptanceCriteria: string[];
   summary: string;
+}
+
+export function isPlanStep(item: PlanTodoItem): item is PlanStep {
+  return typeof item === "object" && item !== null && typeof item.description === "string";
+}
+
+export function planStepDescription(item: PlanTodoItem): string {
+  return isPlanStep(item) ? item.description : item;
 }
 
 export interface ReviewIssue {
@@ -203,8 +222,8 @@ export interface CallSecondaryModelOptions {
   };
   /** File paths to prioritize when selecting inherited session context (e.g. changed files for a review). */
   relevantPaths?: string[];
-  /** Yoo action to resolve a per-task model override from settings. */
-  task?: YooAction;
+  /** Yoo task to resolve a per-task model override from settings. */
+  task?: YooModelTask;
 }
 
 export interface MemoryEntry {
@@ -234,4 +253,10 @@ export interface Conventions {
 export interface ScanResult {
   conventions: Conventions;
   files: string[];
+}
+
+export interface ExplainResult {
+  summary: string;
+  details: string;
+  relatedFiles?: string[];
 }

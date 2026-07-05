@@ -62,7 +62,7 @@ If no secondary model is configured, yoo returns an error. Configure `pi-heyyoo.
 | Option                         | Type                                    | Description                                                                                                                         |
 | ------------------------------ | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `secondary`                    | object                                  | `{ provider, id, thinking? }` for the base secondary model                                                                          |
-| `taskModels`                   | object                                  | Per-tool model overrides keyed by action (`plan`, `review`, `suggest`, `recommend`, `judge`, `scan`, `test`, `security`)            |
+| `taskModels`                   | object                                  | Per-tool model overrides keyed by action (`plan`, `review`, `suggest`, `recommend`, `judge`, `scan`, `test`, `security`, `explain`)  |
 | `autoJudge`                    | boolean                                 | Run `yoo.judge` automatically when the last plan step passes review                                                                 |
 | `preReviewCommands`            | string[]                                | Commands to run before each review; output is included in the review prompt                                                         |
 | `testCommand`                  | string                                  | Command to run for `/yoo test` analysis (e.g. `npm test`). Auto-detected from `package.json` if omitted                             |
@@ -101,6 +101,8 @@ The `yoo` tool is called by the main agent during development:
 | `yoo({ security: "auth changes" })`                                   | Security-sensitive changes     | Audits diff for secrets, injection, auth, and other vulnerabilities |
 | `yoo({ review: "...", verify: true })`                                | Any high-stakes result         | Asks the main agent to confirm or refute the finding with evidence  |
 
+Plan steps can include `priority` (`high`, `medium`, `low`) and `dependsOn` (1-based list of earlier steps). Plain-string steps still work for backward compatibility.
+
 ### `yoo_index` tool
 
 The `yoo_index` tool is a fast, read-only lookup for stored yoo context. It does not call a model.
@@ -115,8 +117,40 @@ The `yoo_index` tool is a fast, read-only lookup for stored yoo context. It does
 | `yoo_index({ topic: "memory", query: "race condition" })` | Memory entries matching a keyword |
 | `yoo_index({ topic: "cost" })` | Estimated session spend |
 | `yoo_index({ topic: "logs" })` | Recent yoo log entries |
+| `yoo_index({ topic: "index" })` | Project symbol index (built by `yoo scan-deep` or `yoo_index({ update: true })`) |
+| `yoo_index({ topic: "learned" })` | Facts recorded with `yoo_learn` |
+| `yoo_index({ update: true })` | Rebuild the symbol index before returning results |
 
-Use `yoo_index` before editing to quickly learn the project's rules, current task, and any known issues.
+Use `yoo_index` before editing to quickly learn the project's rules, current task, known issues, symbols, and recorded facts.
+
+### `yoo_explain` tool
+
+Explain a code snippet, error message, diff, or file with the secondary model.
+
+| Call | What it does |
+| --- | --- |
+| `yoo_explain({ target: "TypeError: Cannot read..." })` | Explains an error and the likely fix |
+| `yoo_explain({ target: "src/auth.ts" })` | Explains the purpose and structure of a file |
+| `yoo_explain({ target: "function verifySession", files: ["src/auth.ts"] })` | Explains a specific function with full file context |
+
+### `yoo_learn` tool
+
+Record a persistent project fact that yoo will remember across sessions.
+
+| Call | What it does |
+| --- | --- |
+| `yoo_learn({ fact: "Auth is handled by Clerk" })` | Stores a fact |
+| `yoo_learn({ fact: "Use camelCase for functions", category: "conventions" })` | Stores a categorized fact |
+| `yoo_learn({ verify: true })` | Check all stored facts against the current codebase (heuristic, no model call) |
+| `yoo_learn({ verify: true, query: "auth" })` | Verify only facts matching a keyword |
+| `yoo_learn({ verify: true, deep: true })` | Verify facts with the secondary model for higher accuracy |
+| `yoo_learn({ verify: true, deep: true, query: "auth" })` | Deep verify only facts matching a keyword |
+
+Recorded facts appear in `yoo_index({ topic: "learned" })`.
+
+`verify` checks referenced files, source files, and symbols from the project index. It returns each fact as `valid`, `questionable`, or `outdated` — no model call, so it is fast and safe to run manually.
+
+`verify` + `deep` calls the secondary model for each fact, including the source file and project conventions in the prompt. It is more accurate but costs tokens per fact.
 
 ## Commands
 
@@ -133,7 +167,11 @@ Use `yoo_index` before editing to quickly learn the project's rules, current tas
 | `/yoo security [description] [--full-project]` | Security audit of current diff or sampled project files                                |
 | `/yoo-status`                                  | Detailed diagnostics: base + per-tool models, config, plan, VCS, conventions, cost     |
 | `/yoo-info`                                    | Alias for `/yoo-status`                                                                |
-| `/yoo-index [topic]`                           | Read stored yoo context (plan, memory, conventions, cost, logs)                        |
+| `/yoo-index [topic] [--update]`                | Read stored yoo context (plan, memory, conventions, cost, logs, index, learned)        |
+| `/yoo-explain <target> [--files ...]`          | Explain code, error, or file with the secondary model                                  |
+| `/yoo-learn <fact> [--category <cat>]`         | Record a persistent project fact                                                       |
+| `/yoo-learn --verify [--query <keyword>]`      | Check stored facts against the current codebase                                        |
+| `/yoo-learn --verify --deep [--query <keyword>]` | Check stored facts with the secondary model                                            |
 | `/yoo-model`                                   | Interactively pick the base or per-tool model; shows current provider/model/thinking   |
 | `/yoo-model <provider> [filter]`               | Pre-select provider and optionally filter the model list                               |
 | `/yoo-config`                                  | Show current `pi-heyyoo` settings                                                      |
@@ -236,7 +274,9 @@ This prevents the main agent from spinning in review-fix-review cycles.
 - **Diff scope control** — limit reviews with `files`, `exclude`, `revision`, `since`, or `untracked`
 - **Session-scoped state** — plan, review memory, and cost are scoped to the current Pi session, so old plans and issues do not leak into unrelated work; conventions persist per project
 - **Deep project scan** — `yoo.scan` reads `package.json`, `AGENTS.md`, detects frameworks, tests, ORM, UI, build tools, CI, package manager, entry points, scripts, and samples code style
+- **Project symbol index** — `yoo scan-deep` parses TypeScript/JavaScript source files and stores exported functions, classes, interfaces, types, and more; surfaced by `yoo_index`
 - **Project conventions** — scan results feed into plan, suggest, recommend, review, and judge prompts
+- **Learned facts** — `yoo_learn` persists project-specific facts across sessions; surfaced by `yoo_index`
 - **Review memory** — previous issues per file are included so the model knows what was already fixed; memory is reset for each new Pi session
 - **Pre-review commands** — configured lint/test/typecheck output is included in the review prompt
 - **Cost tracking + budget** — estimated spend per call, session total, and optional hard budget

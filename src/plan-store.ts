@@ -47,7 +47,13 @@ export function loadState(cwd: string): HeyyooSessionState | null {
 function salvagePlan(raw: unknown): PlanResult | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const r = raw as Record<string, unknown>;
-  const todo = Array.isArray(r.todo) ? r.todo.filter((v): v is string => typeof v === "string") : [];
+  const todo = Array.isArray(r.todo)
+    ? r.todo.filter((v): v is string | { description: string } => {
+        if (typeof v === "string") return true;
+        if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+        return typeof (v as Record<string, unknown>).description === "string";
+      })
+    : [];
   const acceptanceCriteria = Array.isArray(r.acceptanceCriteria)
     ? r.acceptanceCriteria.filter((v): v is string => typeof v === "string")
     : [];

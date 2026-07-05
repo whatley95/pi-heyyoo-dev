@@ -1,10 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { YooAction } from "./types.js";
+import type { YooModelTask } from "./types.js";
 
 export type ProgressReporter = (stage: number, total: number, message: string) => void;
 
 export function createProgressReporter(
-  action: YooAction,
+  action: YooModelTask,
   ctx: ExtensionContext,
   onUpdate?: (update: unknown) => void,
 ): ProgressReporter {

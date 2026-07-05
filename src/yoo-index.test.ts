@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConventions } from "./conventions.js";
@@ -9,6 +9,7 @@ import { logEvent } from "./logger.js";
 import { saveState } from "./plan-store.js";
 import { recordIssues } from "./review-memory.js";
 import { executeYooIndex, formatIndexResult, validateYooIndexParams } from "./yoo-index.js";
+import { recordLearnedFact } from "./yoo-learn.js";
 import type { Conventions, HeyyooSessionState, ReviewIssue, UsageCost } from "./types.js";
 
 describe("yoo-index", () => {
@@ -124,6 +125,25 @@ describe("yoo-index", () => {
     const text = formatIndexResult(result);
     assert.match(text, /# yoo index/);
     assert.match(text, /## Session cost/);
+  });
+
+  it("updates and returns project index", () => {
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(join(cwd, "src", "demo.ts"), "export const demo = 1;", "utf-8");
+
+    const result = executeYooIndex(cwd, { topic: "index", update: true });
+    assert.ok(result.index, "should return built index");
+    assert.ok(result.indexSummary, "should include index summary");
+    assert.match(result.indexSummary!, /demo/);
+  });
+
+  it("returns learned facts", () => {
+    recordLearnedFact(cwd, "Use camelCase for functions.", { category: "conventions" });
+
+    const result = executeYooIndex(cwd, { topic: "learned" });
+    assert.ok(result.learned, "should include learned facts");
+    assert.equal(result.learned?.length, 1);
+    assert.match(result.learnedSummary!, /camelCase/);
   });
 
   it("cleans up temp dir", () => {

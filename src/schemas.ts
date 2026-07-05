@@ -1,8 +1,17 @@
 import { Type } from "@sinclair/typebox";
 
+export const PlanStepSchema = Type.Object(
+  {
+    description: Type.String(),
+    priority: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")])),
+    dependsOn: Type.Optional(Type.Array(Type.Number())),
+  },
+  { additionalProperties: false },
+);
+
 export const PlanResultSchema = Type.Object(
   {
-    todo: Type.Array(Type.String()),
+    todo: Type.Array(Type.Union([Type.String(), PlanStepSchema])),
     acceptanceCriteria: Type.Array(Type.String()),
     summary: Type.String(),
   },

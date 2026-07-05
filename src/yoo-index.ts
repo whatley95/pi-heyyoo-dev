@@ -1,19 +1,29 @@
 import { loadConventions, formatConventions } from "./conventions.js";
+import { isPlanStep, planStepDescription } from "./types.js";
 import { getSessionCost } from "./cost-tracker.js";
-import { readRecentLogs } from "./logger.js";
+import { logEvent, readRecentLogs } from "./logger.js";
+import {
+  loadProjectIndex,
+  buildProjectIndex,
+  saveProjectIndex,
+  formatIndexSummary,
+  type ProjectIndex,
+} from "./project-index.js";
 import { loadState } from "./plan-store.js";
 import { getMemorySummary, getPastIssuesForFiles } from "./review-memory.js";
-import type { Conventions, HeyyooSessionState } from "./types.js";
+import { findLearnedFacts, formatLearnedFacts, type LearnedFact } from "./yoo-learn.js";
+import type { Conventions, HeyyooSessionState, PlanTodoItem } from "./types.js";
 
-export type IndexTopic = "all" | "plan" | "memory" | "conventions" | "cost" | "logs";
+export type IndexTopic = "all" | "plan" | "memory" | "conventions" | "cost" | "logs" | "index" | "learned";
 
 export interface YooIndexParams {
   topic?: IndexTopic;
   files?: string[];
   query?: string;
+  update?: boolean;
 }
 
-const VALID_TOPICS: IndexTopic[] = ["all", "plan", "memory", "conventions", "cost", "logs"];
+const VALID_TOPICS: IndexTopic[] = ["all", "plan", "memory", "conventions", "cost", "logs", "index", "learned"];
 
 export function validateYooIndexParams(raw: unknown): YooIndexParams {
   const params: YooIndexParams = {};
@@ -28,6 +38,9 @@ export function validateYooIndexParams(raw: unknown): YooIndexParams {
     if (typeof r.query === "string") {
       params.query = r.query;
     }
+    if (r.update === true) {
+      params.update = true;
+    }
   }
   return params;
 }
@@ -36,7 +49,7 @@ export interface IndexResult {
   topic: IndexTopic;
   plan?: {
     summary?: string;
-    todo?: string[];
+    todo?: PlanTodoItem[];
     completedSteps: number;
     totalSteps: number;
     acceptanceCriteria?: string[];
@@ -51,6 +64,10 @@ export interface IndexResult {
     updatedAt: string;
   };
   logs?: string[];
+  index?: ProjectIndex;
+  indexSummary?: string;
+  learned?: LearnedFact[];
+  learnedSummary?: string;
 }
 
 function normalizeTopic(topic: unknown): IndexTopic {
@@ -80,6 +97,17 @@ export function executeYooIndex(cwd: string, params: YooIndexParams): IndexResul
 
   const result: IndexResult = { topic };
 
+  if (params.update) {
+    try {
+      const index = buildProjectIndex(cwd);
+      saveProjectIndex(cwd, index);
+    } catch (err) {
+      logEvent(cwd, "warn", "yoo_index update failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   if (wants("conventions")) {
     const conventions = loadConventions(cwd);
     if (conventions) {
@@ -99,6 +127,12 @@ export function executeYooIndex(cwd: string, params: YooIndexParams): IndexResul
     result.memory = query ? filterText(memoryText, query) : memoryText;
   }
 
+  if (wants("learned")) {
+    const learnedFacts = findLearnedFacts(cwd, query || undefined);
+    result.learned = learnedFacts;
+    result.learnedSummary = formatLearnedFacts(learnedFacts);
+  }
+
   if (wants("cost")) {
     result.cost = getSessionCost(cwd);
   }
@@ -106,6 +140,14 @@ export function executeYooIndex(cwd: string, params: YooIndexParams): IndexResul
   if (wants("logs")) {
     const limit = topic === "all" ? 10 : 50;
     result.logs = readRecentLogs(cwd, limit);
+  }
+
+  if (wants("index")) {
+    const index = loadProjectIndex(cwd);
+    if (index) {
+      result.index = index;
+      result.indexSummary = formatIndexSummary(index, query || undefined);
+    }
   }
 
   return result;
@@ -138,7 +180,18 @@ export function formatIndexResult(result: IndexResult): string {
     if (result.plan.todo && result.plan.todo.length > 0) {
       parts.push("\nTodo:");
       for (const step of result.plan.todo) {
-        parts.push(`- ${step}`);
+        const desc = planStepDescription(step);
+        const badges: string[] = [];
+        if (isPlanStep(step)) {
+          if (step.priority) {
+            const icon = step.priority === "high" ? "🔴" : step.priority === "medium" ? "🟡" : "🟢";
+            badges.push(`${icon} ${step.priority}`);
+          }
+          if (step.dependsOn && step.dependsOn.length > 0) {
+            badges.push(`depends on ${step.dependsOn.map((n) => `#${n}`).join(", ")}`);
+          }
+        }
+        parts.push(`- ${desc}${badges.length > 0 ? ` (${badges.join(" · ")})` : ""}`);
       }
     }
     if (result.plan.acceptanceCriteria && result.plan.acceptanceCriteria.length > 0) {
@@ -162,6 +215,16 @@ export function formatIndexResult(result: IndexResult): string {
     parts.push(`Estimated cost: $${result.cost.costUsd.toFixed(6)}`);
   }
 
+  if (result.indexSummary !== undefined) {
+    parts.push("\n## Project index\n");
+    parts.push(result.indexSummary);
+  }
+
+  if (result.learnedSummary !== undefined) {
+    parts.push("\n## Learned facts\n");
+    parts.push(result.learnedSummary);
+  }
+
   if (result.logs) {
     parts.push("\n## Recent logs\n");
     if (result.logs.length === 0) {
@@ -177,7 +240,15 @@ export function formatIndexResult(result: IndexResult): string {
     }
   }
 
-  if (!result.conventions && !result.plan && result.memory === undefined && !result.cost && !result.logs) {
+  if (
+    !result.conventions &&
+    !result.plan &&
+    result.memory === undefined &&
+    !result.cost &&
+    !result.logs &&
+    !result.index &&
+    !result.learned
+  ) {
     parts.push("\nNo stored yoo context found. Run `yoo scan` to build project conventions.");
   }
 

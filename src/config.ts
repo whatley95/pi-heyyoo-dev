@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, getProjectConfigPath } from "./pi-paths.js";
 import { logEvent } from "./logger.js";
-import type { HeyyooConfig, SecondaryModelConfig, YooAction } from "./types.js";
+import type { HeyyooConfig, SecondaryModelConfig, YooModelTask } from "./types.js";
 
 export { getAgentDir, getProjectConfigPath } from "./pi-paths.js";
 
@@ -54,7 +54,7 @@ function mergeSecondary(base: SecondaryModelConfig, override: unknown): Secondar
   return mergeSecondaryFields(base, override as Partial<SecondaryModelConfig>) as SecondaryModelConfig;
 }
 
-export function resolveTaskModel(config: HeyyooConfig, action: YooAction): SecondaryModelConfig {
+export function resolveTaskModel(config: HeyyooConfig, action: YooModelTask): SecondaryModelConfig {
   const override = config.taskModels?.[action];
   if (!override) return config.secondary;
   return mergeSecondary(config.secondary, override);
@@ -140,7 +140,7 @@ function mergePartialSecondary(
   return mergeSecondaryFields(base, override);
 }
 
-const VALID_YOO_ACTIONS = new Set<string>([
+const VALID_YOO_MODEL_TASKS = new Set<string>([
   "plan",
   "review",
   "suggest",
@@ -149,18 +149,19 @@ const VALID_YOO_ACTIONS = new Set<string>([
   "scan",
   "test",
   "security",
+  "explain",
 ]);
 
 function mergeTaskModels(base: HeyyooConfig["taskModels"], override: unknown): HeyyooConfig["taskModels"] {
   if (!override || typeof override !== "object" || Array.isArray(override)) {
     return base;
   }
-  const o = override as Partial<Record<YooAction, Partial<SecondaryModelConfig>>>;
+  const o = override as Partial<Record<YooModelTask, Partial<SecondaryModelConfig>>>;
   const result: NonNullable<HeyyooConfig["taskModels"]> = base ? { ...base } : {};
   for (const [action, value] of Object.entries(o)) {
-    if (!VALID_YOO_ACTIONS.has(action)) continue;
+    if (!VALID_YOO_MODEL_TASKS.has(action)) continue;
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    result[action as YooAction] = mergePartialSecondary(result[action as YooAction] ?? {}, value);
+    result[action as YooModelTask] = mergePartialSecondary(result[action as YooModelTask] ?? {}, value);
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }

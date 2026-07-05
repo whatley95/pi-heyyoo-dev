@@ -51,6 +51,7 @@ import type {
   ReviewResult,
   ReviewVerdict,
 } from "./types.js";
+import { isPlanStep, planStepDescription } from "./types.js";
 import {
   createLoopDetectionState,
   recordToolCall,
@@ -76,6 +77,16 @@ import { logEvent, readRecentLogs, clearLogs } from "./logger.js";
 import { createProgressReporter, clearYooStatus, type ProgressReporter } from "./progress.js";
 import { setSessionId, clearSessionId, pruneSessionDirs } from "./session-scope.js";
 import { executeYooIndex, formatIndexResult, validateYooIndexParams } from "./yoo-index.js";
+import { buildProjectIndex, saveProjectIndex } from "./project-index.js";
+import { executeYooExplain, validateYooExplainParams } from "./yoo-explain.js";
+import {
+  recordLearnedFact,
+  findLearnedFacts,
+  clearLearnedFacts,
+  verifyLearnedFacts,
+  verifyLearnedFactsDeep,
+  formatVerificationReport,
+} from "./yoo-learn.js";
 
 const STAGES = {
   plan: 3,
@@ -135,7 +146,8 @@ function getProgress(cwd: string): { current: number; total: number; nextStep?: 
   const state = getState(cwd);
   const current = state.completedSteps;
   const total = state.totalSteps;
-  const nextStep = state.plan?.todo[current] ?? undefined;
+  const item = state.plan?.todo[current];
+  const nextStep = item ? planStepDescription(item) : undefined;
   return { current, total, nextStep };
 }
 
@@ -144,13 +156,14 @@ function buildReviewHistory(cwd: string): string {
   if (!state.plan || state.plan.todo.length === 0) return "";
   const lines: string[] = [];
   for (let i = 0; i < state.plan.todo.length; i++) {
+    const desc = planStepDescription(state.plan.todo[i]);
     if (i < state.completedSteps) {
       const reviewed = state.reviewedSteps[i] ? "reviewed and passed" : "marked complete (not reviewed)";
-      lines.push(`✓ Step ${i + 1}: ${state.plan.todo[i]} — ${reviewed}`);
+      lines.push(`✓ Step ${i + 1}: ${desc} — ${reviewed}`);
     } else if (i === state.completedSteps) {
-      lines.push(`→ Step ${i + 1}: ${state.plan.todo[i]} — current (may or may not be done)`);
+      lines.push(`→ Step ${i + 1}: ${desc} — current (may or may not be done)`);
     } else {
-      lines.push(`· Step ${i + 1}: ${state.plan.todo[i]} — not yet started`);
+      lines.push(`· Step ${i + 1}: ${desc} — not yet started`);
     }
   }
   return lines.join("\n");
@@ -1080,6 +1093,21 @@ async function executeYooScan(
   progress(4, STAGES.scan, "Saving conventions…");
   saveConventions(cwd, conventions);
 
+  if (deepScanEnabled) {
+    try {
+      const index = buildProjectIndex(cwd);
+      saveProjectIndex(cwd, index);
+      logEvent(cwd, "info", "Project index built", {
+        files: index.files.length,
+        symbols: index.files.reduce((sum, f) => sum + f.symbols.length, 0),
+      });
+    } catch (err) {
+      logEvent(cwd, "warn", "Failed to build project index", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   logEvent(cwd, "info", "Scan completed", {
     deepScan: Boolean(deepScanEnabled),
     sampleCount: trimmedSamples.length,
@@ -1757,6 +1785,9 @@ export default function (pi: ExtensionAPI) {
       "Use topic 'memory' with files:[...] to see past review issues for specific files.",
       "Use topic 'cost' to check estimated spend in the current session.",
       "Use topic 'logs' to see recent yoo errors or warnings.",
+      "Use topic 'index' to see the project symbol index built by yoo scan-deep or yoo_index update.",
+      "Use topic 'learned' to see facts recorded with yoo_learn.",
+      "Set update:true to rebuild the symbol index on demand.",
       "yoo_index does not call a model; it only reads data yoo already stored.",
     ],
     parameters: Type.Object({
@@ -1769,6 +1800,8 @@ export default function (pi: ExtensionAPI) {
             Type.Literal("conventions"),
             Type.Literal("cost"),
             Type.Literal("logs"),
+            Type.Literal("index"),
+            Type.Literal("learned"),
           ],
           {
             description: "Which stored context to return. Defaults to 'all'.",
@@ -1782,7 +1815,12 @@ export default function (pi: ExtensionAPI) {
       ),
       query: Type.Optional(
         Type.String({
-          description: "Optional keyword filter applied to memory text.",
+          description: "Optional keyword filter applied to memory text and index symbols.",
+        }),
+      ),
+      update: Type.Optional(
+        Type.Boolean({
+          description: "If true, rebuild the project symbol index before returning results.",
         }),
       ),
     }),
@@ -1804,6 +1842,172 @@ export default function (pi: ExtensionAPI) {
           isError: true,
         };
       }
+    },
+  });
+
+  pi.registerTool({
+    name: "yoo_explain",
+    label: "Yoo Explain — Code & Error Explanations",
+    description:
+      "Explain a code snippet, error message, diff, or file using the secondary model. Useful when the main agent encounters an unfamiliar API, a cryptic error, or wants a second pair of eyes on a piece of code.",
+    promptSnippet: "yoo_explain: explain this code or error before acting on it",
+    promptGuidelines: [
+      "Call yoo_explain when you see an error you do not fully understand.",
+      "Use yoo_explain to get a concise explanation of a code snippet, function, or file.",
+      "Pass files:[...] so the model can see full context around the target.",
+      "Use context to add extra background (e.g. 'this is thrown during yoo scan').",
+    ],
+    parameters: Type.Object({
+      target: Type.String({
+        description: "The code, error message, diff, or concept to explain. Required.",
+      }),
+      context: Type.Optional(
+        Type.String({
+          description: "Optional background context to help the explanation.",
+        }),
+      ),
+      files: Type.Optional(
+        Type.Array(Type.String(), {
+          description: "Optional file paths to include as full context.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const validation = validateYooExplainParams(params);
+      if (!validation.ok) {
+        return {
+          content: [{ type: "text", text: `yoo_explain: ${validation.error}` }],
+          isError: true,
+        };
+      }
+
+      const progress = createProgressReporter("explain", ctx);
+      const result = await executeYooExplain(ctx.cwd, validation.params, signal, progress, ctx.sessionManager);
+      if ("error" in result) {
+        return {
+          content: [{ type: "text", text: `yoo_explain error: ${result.error}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: result.result.details }],
+        details: { action: "explain", explain: result.result, cost: result.cost },
+        isError: false,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "yoo_learn",
+    label: "Yoo Learn — Project Facts",
+    description:
+      "Record a persistent project fact that yoo will remember across sessions. Facts are surfaced by yoo_index so the main agent can ground future work in project-specific knowledge.",
+    promptSnippet: "yoo_learn: remember this project fact for future sessions",
+    promptGuidelines: [
+      "Call yoo_learn to record project-specific facts, decisions, or quirks the main agent should remember.",
+      "Use a category to group related facts (e.g. 'auth', 'build', 'conventions').",
+      "Keep facts concise and actionable.",
+      "Recorded facts appear in yoo_index topic 'learned'.",
+      "Use verify:true to check stored facts against the current codebase instead of recording.",
+      "Add deep:true to verify with the secondary model for higher accuracy (costs tokens per fact).",
+    ],
+    parameters: Type.Object({
+      fact: Type.Optional(
+        Type.String({
+          description: "The project fact to record. Required unless verify is true.",
+        }),
+      ),
+      category: Type.Optional(
+        Type.String({
+          description: "Optional category for grouping facts.",
+        }),
+      ),
+      source: Type.Optional(
+        Type.String({
+          description: "Optional source file or URL where this fact originated.",
+        }),
+      ),
+      verify: Type.Optional(
+        Type.Boolean({
+          description: "If true, verify stored facts against the current codebase instead of recording.",
+        }),
+      ),
+      query: Type.Optional(
+        Type.String({
+          description: "When verifying, only check facts matching this keyword.",
+        }),
+      ),
+      deep: Type.Optional(
+        Type.Boolean({
+          description: "When verifying, use the secondary model for deeper accuracy.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (!params || typeof params !== "object" || Array.isArray(params)) {
+        return {
+          content: [{ type: "text", text: "yoo_learn: Invalid parameters." }],
+          isError: true,
+        };
+      }
+      const r = params as Record<string, unknown>;
+      const query = typeof r.query === "string" ? r.query : undefined;
+
+      if (r.verify === true && r.deep === true) {
+        const progress = createProgressReporter("explain", ctx);
+        const { results, cost } = await verifyLearnedFactsDeep(
+          ctx.cwd,
+          query,
+          signal,
+          (current, total) => progress(current, total, `Verifying fact ${current}/${total}…`),
+          ctx.sessionManager,
+        );
+        const text = formatVerificationReport(results);
+        return {
+          content: [{ type: "text", text }],
+          details: { action: "learn", verify: results, cost },
+          isError: false,
+        };
+      }
+
+      if (r.verify === true) {
+        const results = verifyLearnedFacts(ctx.cwd, query);
+        const text = formatVerificationReport(results);
+        return {
+          content: [{ type: "text", text }],
+          details: { action: "learn", verify: results },
+          isError: false,
+        };
+      }
+
+      if (typeof r.fact !== "string" || r.fact.length === 0) {
+        return {
+          content: [{ type: "text", text: "yoo_learn: Missing or empty 'fact' parameter." }],
+          isError: true,
+        };
+      }
+      const category = typeof r.category === "string" ? r.category : undefined;
+      const source = typeof r.source === "string" ? r.source : undefined;
+      recordLearnedFact(ctx.cwd, r.fact, { category, source });
+      const related = findLearnedFacts(ctx.cwd, r.fact).slice(0, 10);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Recorded fact.${
+              related.length > 1
+                ? ` Related facts (${related.length - 1}):\n${related
+                    .slice(1)
+                    .map((f) => `- ${f.fact}`)
+                    .join("\n")}`
+                : ""
+            }`,
+          },
+        ],
+        details: { action: "learn", learned: related },
+        isError: false,
+      };
     },
   });
 
@@ -2270,17 +2474,115 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yoo-index", {
-    description: "Read stored yoo project context. Usage: /yoo-index [all|plan|memory|conventions|cost|logs]",
+    description:
+      "Read stored yoo project context. Usage: /yoo-index [all|plan|memory|conventions|cost|logs|index|learned] [--update]",
     handler: async (args, ctx) => {
-      const topic = args.trim() || "all";
-      const result = executeYooIndex(ctx.cwd, { topic: topic as import("./yoo-index.js").IndexTopic });
+      const trimmed = args.trim();
+      const update = trimmed.includes("--update");
+      const topic = trimmed.replace("--update", "").trim() || "all";
+      const result = executeYooIndex(ctx.cwd, {
+        topic: topic as import("./yoo-index.js").IndexTopic,
+        update,
+      });
       const text = formatIndexResult(result);
       await ctx.ui.select("yoo index", text.split("\n").filter(Boolean));
     },
   });
 
+  pi.registerCommand("yoo-explain", {
+    description: "Explain code, an error, or a file. Usage: /yoo-explain <target> [--files file1,file2,...]",
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      if (!trimmed) {
+        ctx.ui.notify("Provide a target to explain, e.g. /yoo-explain src/index.ts", "warn");
+        return;
+      }
+
+      let target = trimmed;
+      let files: string[] = [];
+      const filesMatch = trimmed.match(/--files\s+(.+)$/);
+      if (filesMatch) {
+        target = trimmed.slice(0, trimmed.indexOf("--files")).trim();
+        files = filesMatch[1]
+          .split(",")
+          .map((f) => f.trim())
+          .filter(Boolean);
+      }
+
+      const signal = undefined;
+      const progress = createProgressReporter("explain", ctx);
+      const result = await executeYooExplain(ctx.cwd, { target, files }, signal, progress, ctx.sessionManager);
+      clearYooStatus(ctx);
+      if ("error" in result) {
+        ctx.ui.notify(`yoo-explain error: ${result.error}`, "error");
+        return;
+      }
+      await ctx.ui.select("yoo explain", result.result.details.split("\n").filter(Boolean));
+    },
+  });
+
+  pi.registerCommand("yoo-learn", {
+    description:
+      "Record or verify project facts. Usage: /yoo-learn <fact> [--category <cat>] | /yoo-learn --verify [--query <keyword>] [--deep]",
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      if (!trimmed) {
+        ctx.ui.notify("Provide a fact or use --verify, e.g. /yoo-learn Auth is handled by Clerk.", "warn");
+        return;
+      }
+
+      if (trimmed === "--verify" || trimmed.startsWith("--verify ")) {
+        const queryMatch = trimmed.match(/--query\s+(\S+)/);
+        const query = queryMatch ? queryMatch[1] : undefined;
+        const deep = trimmed.includes("--deep");
+
+        if (deep) {
+          const signal = undefined;
+          const progress = createProgressReporter("explain", ctx);
+          const { results, cost } = await verifyLearnedFactsDeep(
+            ctx.cwd,
+            query,
+            signal,
+            (current, total) => progress(current, total, `Verifying fact ${current}/${total}…`),
+            ctx.sessionManager,
+          );
+          clearYooStatus(ctx);
+          const lines = formatVerificationReport(results).split("\n").filter(Boolean);
+          lines.push(
+            "",
+            `${cost.estimatedInputTokens + cost.estimatedOutputTokens} tokens · $${cost.estimatedCostUsd.toFixed(6)}`,
+          );
+          await ctx.ui.select("yoo learn verify (deep)", lines);
+          return;
+        }
+
+        const results = verifyLearnedFacts(ctx.cwd, query);
+        const text = formatVerificationReport(results);
+        await ctx.ui.select("yoo learn verify", text.split("\n").filter(Boolean));
+        return;
+      }
+
+      let fact = trimmed;
+      let category: string | undefined;
+      const categoryMatch = trimmed.match(/--category\s+(\S+)/);
+      if (categoryMatch) {
+        category = categoryMatch[1];
+        fact = trimmed.replace(categoryMatch[0], "").trim();
+      }
+
+      if (!fact) {
+        ctx.ui.notify("Provide a fact to record.", "warn");
+        return;
+      }
+
+      recordLearnedFact(ctx.cwd, fact, { category });
+      ctx.ui.notify(`Recorded project fact${category ? ` [${category}]` : ""}.`, "info");
+    },
+  });
+
   pi.registerCommand("yoo-clear", {
-    description: "Clear the active yoo plan, state, cost, memory, conventions, loop history, and inherited session",
+    description:
+      "Clear the active yoo plan, state, cost, memory, conventions, learned facts, loop history, and inherited session",
     handler: async (_args, ctx) => {
       sessionStates.delete(ctx.cwd);
       loopStates.delete(ctx.cwd);
@@ -2289,8 +2591,12 @@ export default function (pi: ExtensionAPI) {
       resetCost(ctx.cwd);
       clearMemory(ctx.cwd);
       clearConventions(ctx.cwd);
+      clearLearnedFacts(ctx.cwd);
       clearPromptCache();
-      ctx.ui.notify("yoo plan, state, cost, memory, conventions, loop history, and inherited session cleared.", "info");
+      ctx.ui.notify(
+        "yoo plan, state, cost, memory, conventions, learned facts, loop history, and inherited session cleared.",
+        "info",
+      );
     },
   });
 
@@ -2739,7 +3045,7 @@ async function showYooStatus(ctx: ExtensionContext): Promise<void> {
   if (state.plan) {
     lines.push(`  Progress: ${state.completedSteps}/${state.totalSteps} steps completed`);
     for (let i = 0; i < state.plan.todo.length; i++) {
-      lines.push(`    ${state.completedSteps > i ? "✓" : "·"} ${state.plan.todo[i]}`);
+      lines.push(`    ${state.completedSteps > i ? "✓" : "·"} ${planStepDescription(state.plan.todo[i])}`);
     }
     if (state.plan.acceptanceCriteria.length > 0) {
       lines.push("  Acceptance criteria:");
@@ -2808,7 +3114,19 @@ function formatResultText(result: YooToolResult): string {
     lines.push("");
     lines.push("### Todo");
     for (let i = 0; i < result.plan.todo.length; i++) {
-      lines.push(`${i + 1}. ${result.plan.todo[i]}`);
+      const step = result.plan.todo[i];
+      const desc = planStepDescription(step);
+      const badges: string[] = [];
+      if (isPlanStep(step)) {
+        if (step.priority) {
+          const icon = step.priority === "high" ? "🔴" : step.priority === "medium" ? "🟡" : "🟢";
+          badges.push(`${icon} ${step.priority}`);
+        }
+        if (step.dependsOn && step.dependsOn.length > 0) {
+          badges.push(`depends on ${step.dependsOn.map((n) => `#${n}`).join(", ")}`);
+        }
+      }
+      lines.push(`${i + 1}. ${desc}${badges.length > 0 ? ` (${badges.join(" · ")})` : ""}`);
     }
     lines.push("");
     lines.push("### Acceptance Criteria");
