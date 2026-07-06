@@ -15,12 +15,14 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
     baseUrl: "https://opencode.ai/zen/go/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   opencode: {
     style: "openai-compatible",
     baseUrl: "https://opencode.ai/zen/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   anthropic: {
     style: "anthropic",
@@ -33,60 +35,70 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
     baseUrl: "https://api.openai.com/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   deepseek: {
     style: "openai-compatible",
     baseUrl: "https://api.deepseek.com/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   openrouter: {
     style: "openai-compatible",
     baseUrl: "https://openrouter.ai/api/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   groq: {
     style: "openai-compatible",
     baseUrl: "https://api.groq.com/openai/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   mistral: {
     style: "openai-compatible",
     baseUrl: "https://api.mistral.ai/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   xai: {
     style: "openai-compatible",
     baseUrl: "https://api.x.ai/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   together: {
     style: "openai-compatible",
     baseUrl: "https://api.together.xyz/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   fireworks: {
     style: "openai-compatible",
     baseUrl: "https://api.fireworks.ai/inference/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   cerebras: {
     style: "openai-compatible",
     baseUrl: "https://api.cerebras.ai/v1",
     authHeader: "Authorization",
     authPrefix: "Bearer ",
+    supportsJsonObject: true,
   },
   google: {
     style: "openai-compatible",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     authHeader: "x-goog-api-key",
     authPrefix: "",
+    supportsJsonObject: true,
   },
 };
 
@@ -105,9 +117,16 @@ function resolveProviderApiInfo(provider: string, secondary?: SecondaryModelConf
       baseUrl: secondary.baseUrl.replace(/\/$/, ""),
       authHeader: secondary.authHeader ?? (style === "anthropic" ? "x-api-key" : "Authorization"),
       authPrefix: secondary.authPrefix ?? (style === "anthropic" ? "" : "Bearer "),
+      supportsJsonObject: style === "openai-compatible",
     };
   }
   return getProviderApiInfo(provider);
+}
+
+/** Returns true when the effective provider supports OpenAI-style json_object structured output. */
+export function providerSupportsJsonObject(provider: string, secondary?: SecondaryModelConfig): boolean {
+  const apiInfo = resolveProviderApiInfo(provider, secondary);
+  return apiInfo?.supportsJsonObject === true;
 }
 
 const piSessionIds = new Map<string, string>();
@@ -127,7 +146,7 @@ export async function callSecondaryModel(
   userPrompt: string,
   options: CallSecondaryModelOptions = {},
 ): Promise<{ content: string; usage: UsageCost }> {
-  const { signal, thinking: optionsThinking, cwd, sessionManager, relevantPaths, task } = options;
+  const { signal, thinking: optionsThinking, cwd, sessionManager, relevantPaths, task, structuredOutput } = options;
   const config = cwd ? loadHeyyooConfig(cwd) : undefined;
   const effectiveSecondary = config && task ? resolveTaskModel(config, task) : config?.secondary;
   provider = (effectiveSecondary?.provider || provider).toLowerCase();
@@ -210,6 +229,7 @@ export async function callSecondaryModel(
       modelInfoOverride,
       cwd,
       sessionId,
+      structuredOutput,
     );
   } catch (err) {
     if (cwd) {
@@ -784,6 +804,7 @@ async function callOpenAiCompatibleApi(
   modelInfoOverride?: Partial<import("./model-registry.js").ModelInfo>,
   cwd?: string,
   sessionId?: string,
+  structuredOutput = false,
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = buildOpenAiUrl(apiInfo, apiKey);
 
@@ -806,6 +827,9 @@ async function callOpenAiCompatibleApi(
     temperature: 0.3,
     max_tokens: outputTokenLimit,
   };
+  if (structuredOutput && apiInfo.supportsJsonObject) {
+    body.response_format = { type: "json_object" };
+  }
   if (thinkingEnabled) {
     delete body.temperature;
     if (supportsReasoning) {
@@ -894,6 +918,7 @@ async function callOpenAiCompatibleApi(
       modelInfoOverride,
       cwd,
       sessionId,
+      structuredOutput,
     );
   }
 

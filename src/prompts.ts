@@ -25,7 +25,17 @@ import {
 
 const PAIR_PROGRAMMER_PERSONA = `You are a senior pair programmer sitting next to the developer. You are collaborative, direct, and focused on shipping correct, maintainable code. You explain your reasoning briefly but stay actionable.`;
 
-function finalJsonBlock(schema: string): string {
+function finalJsonBlock(schema: string, nativeJson = false): string {
+  if (nativeJson) {
+    return `Return only valid JSON matching this schema. Do not include markdown fences, explanatory text, or commentary outside the JSON object.
+
+JSON schema:
+${schema}
+
+Rules:
+- The response must be a single JSON object parseable by JSON.parse.
+- Do not put comments or trailing commas inside the JSON.`;
+  }
   return `You may write brief Markdown analysis first.
 
 End your response with this exact section:
@@ -148,6 +158,7 @@ function buildAdaptiveReviewPromptImpl(
     truncated?: boolean;
     droppedFiles?: string[];
     budgetNote?: string;
+    nativeJson?: boolean;
   } = {},
 ): { system: string; user: string } {
   const {
@@ -160,6 +171,7 @@ function buildAdaptiveReviewPromptImpl(
     truncated,
     droppedFiles,
     budgetNote,
+    nativeJson,
   } = options;
 
   const criteriaBlock = criteria ? `\n\n<acceptance_criteria>\n${criteria}\n</acceptance_criteria>` : "";
@@ -198,14 +210,17 @@ ${REVIEW_RUBRIC}
 
 You are provided with a diff and, when available, the full contents of changed files. Use the full file contents to verify context outside the diff; do not flag something as missing if you can see it in the full file.
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "verdict": "needs-work",
   "issues": [
     { "severity": "medium", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it" }
   ],
   "suggestions": ["improvement 1", "improvement 2"],
   "consensus": false
-}`)}
+}`,
+  nativeJson,
+)}
 
 Rules:
 - "verdict" must be one of: "pass", "needs-work", "blocked"
@@ -226,13 +241,14 @@ Rules:
   };
 }
 
-function buildScanPromptImpl(): { system: string; user: string } {
+function buildScanPromptImpl(nativeJson = false): { system: string; user: string } {
   return {
     system: `${PAIR_PROGRAMMER_PERSONA}
 
 You are analyzing the codebase to extract conventions and architecture patterns. This context will ground future pair-programming sessions.
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "naming": "dominant naming convention (e.g. camelCase, PascalCase, snake_case)",
   "structure": "project structure summary (e.g. src/, app/, lib/, tests/)",
   "patterns": ["observed pattern 1", "observed pattern 2"],
@@ -246,7 +262,9 @@ ${finalJsonBlock(`{
   "packageManager": "package manager if detectable (e.g. npm, pnpm)",
   "entryPoints": ["src/index.ts"],
   "scripts": ["build: ...", "test: ..."]
-}`)}
+}`,
+  nativeJson,
+)}
 
 Omit optional fields you cannot infer. Be concise and evidence-based.`,
 
@@ -254,7 +272,11 @@ Omit optional fields you cannot infer. Be concise and evidence-based.`,
   };
 }
 
-function buildSuggestPromptImpl(question: string, conventions?: string): { system: string; user: string } {
+function buildSuggestPromptImpl(
+  question: string,
+  conventions?: string,
+  nativeJson = false,
+): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
 
   return {
@@ -262,11 +284,14 @@ function buildSuggestPromptImpl(question: string, conventions?: string): { syste
 
 The developer is asking for advice on a technical choice. Offer practical, balanced options.
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "approaches": [
     { "title": "approach name", "description": "what it is", "pros": ["pro 1", "pro 2"], "cons": ["con 1"] }
   ]
-}`)}
+}`,
+  nativeJson,
+)}
 
 Rules:
 - Provide 2-3 concrete approaches
@@ -282,6 +307,7 @@ function buildRecommendPromptImpl(
   situation: string,
   planTodo?: PlanTodoItem[],
   conventions?: string,
+  nativeJson = false,
 ): { system: string; user: string } {
   const planContext = planTodo?.length
     ? `\n\nCurrent plan (check items already done):\n${planTodo
@@ -296,11 +322,14 @@ function buildRecommendPromptImpl(
 
 Advise the developer on what to do next. Be decisive and actionable.
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "nextStep": "concrete, actionable next step",
   "reasoning": "why this is the right step",
   "alternatives": ["alternative 1", "alternative 2"]
-}`)}
+}`,
+  nativeJson,
+)}
 
 Rules:
 - Return exactly ONE recommended step — be decisive
@@ -319,6 +348,7 @@ function buildTestPromptImpl(
   fileContents: FileContentContext[],
   testOutput: string,
   conventions?: string,
+  nativeJson = false,
 ): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
   const fileContentsBlock =
@@ -334,7 +364,8 @@ function buildTestPromptImpl(
 
 You are reviewing the latest code change specifically for test coverage, test quality, and test failures.
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "verdict": "needs-work",
   "findings": [
     { "severity": "medium", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it", "category": "missing-test" }
@@ -343,7 +374,9 @@ ${finalJsonBlock(`{
     { "file": "src/feature.ts", "reason": "explain what behavior needs a test" }
   ],
   "summary": "one-paragraph assessment"
-}`)}
+}`,
+  nativeJson,
+)}
 
 Rules:
 - "verdict" must be one of: "pass", "needs-work", "blocked"
@@ -366,6 +399,7 @@ function buildSecurityPromptImpl(
   diff: string,
   fileContents: FileContentContext[],
   conventions?: string,
+  nativeJson = false,
 ): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
   const fileContentsBlock =
@@ -378,13 +412,16 @@ function buildSecurityPromptImpl(
 
 You are performing a security audit of the latest code change. Look for common vulnerabilities and risky patterns.
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "verdict": "needs-review",
   "findings": [
     { "severity": "medium", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it", "category": "validation" }
   ],
   "summary": "one-paragraph security assessment"
-}`)}
+}`,
+  nativeJson,
+)}
 
 Rules:
 - "verdict" must be one of: "pass", "needs-review"
@@ -409,6 +446,7 @@ function buildJudgePromptImpl(
   conventions?: string,
   preReviewOutput?: string,
   memoryContext?: string,
+  nativeJson = false,
 ): { system: string; user: string } {
   const planBlock = planTodo?.length
     ? `\n\nOriginal plan:\n${planTodo.map((t, i) => `${i + 1}. ${planStepDescription(t)}`).join("\n")}`
@@ -438,7 +476,8 @@ Additionally, check:
 7. REVIEW HISTORY: Look at the review_history below. Every plan step should have been reviewed and passed before judging. If ANY step was not reviewed, that is a blocking issue.
 8. COHERENCE: Do all pieces work together? Is there anything contradictory?
 
-${finalJsonBlock(`{
+${finalJsonBlock(
+  `{
   "verdict": "needs-work",
   "issues": [
     { "severity": "medium", "file": "path/to/file.ts", "line": 42, "issue": "what's wrong", "suggestion": "how to fix it" }
@@ -446,7 +485,9 @@ ${finalJsonBlock(`{
   "suggestions": ["improvement 1"],
   "consensus": false,
   "summary": "one-paragraph holistic assessment of the completed work"
-}`)}
+}`,
+  nativeJson,
+)}
 
 Rules:
 - "verdict" must be one of: "pass", "needs-work", "blocked"
@@ -500,8 +541,7 @@ export const buildExplainPrompt = memoizePromptBuilder(buildExplainPromptImpl);
 // Review prompts include large, highly-dynamic diffs and file contents, so caching them
 // adds memory pressure and key-serialization cost for near-zero hit rates.
 export const buildAdaptiveReviewPrompt = buildAdaptiveReviewPromptImpl;
-const SCAN_PROMPT = buildScanPromptImpl();
-export const buildScanPrompt = () => ({ system: SCAN_PROMPT.system, user: SCAN_PROMPT.user });
+export const buildScanPrompt = buildScanPromptImpl;
 export const buildSuggestPrompt = memoizePromptBuilder(buildSuggestPromptImpl);
 export const buildRecommendPrompt = memoizePromptBuilder(buildRecommendPromptImpl);
 export const buildTestPrompt = buildTestPromptImpl;
@@ -1040,13 +1080,15 @@ function detectVerdictExplicit(text: string): "pass" | "needs-work" | "blocked" 
 }
 
 /** Keyword heuristic for review/judge verdicts, guarded against false positives like "pass-through".
- *  Does NOT infer "blocked" from the literal word "blocked" in prose — that verdict must come from
- *  detectVerdictExplicit. Strong signals like "broken" / "cannot work" still map to "blocked".
+ *  Does NOT infer "blocked" from keywords in prose — that verdict must come from
+ *  detectVerdictExplicit (an explicit `Verdict: blocked` line). Words like "broken", "blocked",
+ *  or "cannot work" in descriptive prose are too easily false positives (e.g. "keeps developers
+ *  from thinking their build config is broken" is a positive statement). The heuristic only
+ *  infers "pass" or "needs-work".
  */
-function heuristicReviewVerdict(lower: string): "pass" | "needs-work" | "blocked" {
-  if (/\bcannot work\b|\bbroken\b/.test(lower)) return "blocked";
+function heuristicReviewVerdict(lower: string): "pass" | "needs-work" {
   if (/\bneeds-work\b|\bneeds work\b/.test(lower)) return "needs-work";
-  if (/(?:^|[^-\w])pass\b|\bapproved\b|\blooks good\b|\blgtm\b/.test(lower)) return "pass";
+  if (/(?:^|[^-\w])pass(?![\w-])|\bapproved\b|\blooks good\b|\blgtm\b/.test(lower)) return "pass";
   return "needs-work";
 }
 
@@ -1104,8 +1146,21 @@ export function salvageReviewFromMarkdown(raw: string): ReviewResult | null {
   if (suggestionsSection) {
     suggestions = markdownBullets(suggestionsSection);
   } else if (issues.length === 0) {
-    // No structured issues and no suggestions section: keep legacy behavior (all bullets).
-    suggestions = markdownBullets(text).filter((line) => !line.toLowerCase().startsWith("verdict"));
+    // No structured issues and no suggestions section: fall back to loose bullets, but filter
+    // out lines that describe the diff rather than recommend an action.
+    suggestions = markdownBullets(text).filter((line) => {
+      // Strip leading markdown bold/italic markers before checking.
+      const l = line
+        .toLowerCase()
+        .trim()
+        .replace(/^[*_`]+/, "");
+      if (l.startsWith("verdict")) return false;
+      // Diff descriptions: "Old:", "New:", "Before:", "After:", "Was:", "Now:", etc.
+      if (/^(old|new|before|after|was|now|current|previous|changed|change|from|to)\b[:\-—]/.test(l)) return false;
+      // Bare URLs or code-only lines are descriptions, not suggestions.
+      if (/^`?https?:\/\//.test(l)) return false;
+      return true;
+    });
   } else {
     suggestions = [];
   }

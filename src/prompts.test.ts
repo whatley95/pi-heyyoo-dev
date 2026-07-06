@@ -117,6 +117,35 @@ Verdict: pass
     const result = salvageReviewFromMarkdown(text);
     assert.equal(result?.verdict, "needs-work");
   });
+
+  it("does not infer blocked from 'broken' in positive prose", () => {
+    const text =
+      "## Review\n\n**Overall: ✅ Looks good.**\n\n- Keeps developers from thinking their own build config is broken.\n- Nothing is actually wrong here.";
+    const result = salvageReviewFromMarkdown(text);
+    assert.equal(result?.verdict, "pass");
+  });
+
+  it("does not infer blocked from 'cannot work' in prose", () => {
+    const text = "The previous approach cannot work with older SDKs, but the new one handles it. Overall: looks good.";
+    const result = salvageReviewFromMarkdown(text);
+    assert.equal(result?.verdict, "pass");
+  });
+
+  it("does not extract diff descriptions as suggestions", () => {
+    const text = `## Review
+
+**Overall: ✅ Looks good.**
+
+- **Old:** \`https://jb.gitlab.tiongnam.local/repo.git\`
+- **New:** \`https://vpn-jb-gitlab.tiongnam.com/repo.git\`
+- The URL change is correct and necessary.`;
+    const result = salvageReviewFromMarkdown(text);
+    assert.equal(result?.verdict, "pass");
+    // The "Old:" and "New:" lines must not appear as suggestions.
+    for (const s of result?.suggestions ?? []) {
+      assert.ok(!/\b(old|new)\b\s*:/i.test(s), `Diff description leaked into suggestion: ${s}`);
+    }
+  });
 });
 
 describe("salvageJudgeFromMarkdown", () => {
@@ -309,7 +338,7 @@ describe("richer markdown salvage", () => {
 
   it("does not treat pass-through as a pass verdict", () => {
     const result = salvageReviewFromMarkdown("The value is pass-through and broken.");
-    assert.equal(result?.verdict, "blocked");
+    assert.equal(result?.verdict, "needs-work");
   });
 
   it("collects bullets under ### Issues as structured issues", () => {
@@ -747,5 +776,70 @@ describe("validateConventionsResult", () => {
     });
     assert.ok(result);
     assert.ok(typeof result!.generatedAt === "string");
+  });
+});
+
+describe("native JSON prompt instruction", () => {
+  it("plan prompt keeps fenced JSON instruction by default", () => {
+    const prompt = buildPlanPrompt("task", "conventions");
+    assert.ok(prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("```json"));
+    assert.ok(!prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("review prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildAdaptiveReviewPrompt("desc", "diff", [], { nativeJson: true });
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(!prompt.system.includes("```json"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("review prompt keeps fenced JSON instruction when nativeJson is false", () => {
+    const prompt = buildAdaptiveReviewPrompt("desc", "diff", [], { nativeJson: false });
+    assert.ok(prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("```json"));
+    assert.ok(!prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("scan prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildScanPrompt(true);
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("scan prompt keeps fenced JSON instruction by default", () => {
+    const prompt = buildScanPrompt();
+    assert.ok(prompt.system.includes("## Result"));
+    assert.ok(!prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("suggest prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildSuggestPrompt("question", "conventions", true);
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("recommend prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildRecommendPrompt("situation", [], "conventions", true);
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("test prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildTestPrompt("desc", "diff", [], "tests ok", "conventions", true);
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("security prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildSecurityPrompt("desc", "diff", [], "conventions", true);
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
+  });
+
+  it("judge prompt uses raw JSON instruction when nativeJson is true", () => {
+    const prompt = buildJudgePrompt("desc", [], [], "history", "conventions", undefined, "", true);
+    assert.ok(!prompt.system.includes("## Result"));
+    assert.ok(prompt.system.includes("Return only valid JSON"));
   });
 });

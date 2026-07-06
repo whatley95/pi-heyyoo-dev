@@ -4,7 +4,13 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "./pi-paths.js";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
-import { callSecondaryModel, setPiSessionId, clearPiSessionId, estimateCost } from "./secondary-model.js";
+import {
+  callSecondaryModel,
+  setPiSessionId,
+  clearPiSessionId,
+  estimateCost,
+  providerSupportsJsonObject,
+} from "./secondary-model.js";
 import { getDiff, getVcsInfo, splitDiffByFile } from "./diff-grabber.js";
 
 const { version: VERSION, homepage: HOMEPAGE = "https://whatley.xyz" } = JSON.parse(
@@ -302,6 +308,7 @@ async function executeYooReview(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "review", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   const state = getState(cwd);
 
@@ -375,7 +382,14 @@ async function executeYooReview(
   const reviewableFiles = changedFiles.filter(isReviewableFile);
   const filesWithDiff = reviewableFiles.filter((file) => fileDiffs[file] || !truncated);
   const skippedDueToTruncation = reviewableFiles.filter((file) => !fileDiffs[file] && truncated);
-  const shouldParallelize = Boolean(config.parallelReview) && filesWithDiff.length > 1 && strategy !== "diff-only";
+  // Auto-enable parallel review when the diff alone would exceed the available input budget
+  // (the single-diff review would be truncated). This gives complete per-file coverage instead
+  // of a partial diff. Explicit parallelReview config still overrides.
+  const diffLikelyTruncated = estimateTokens(diff) > Math.max(0, budgetWithPreReview.availableInputTokens - 1000);
+  const shouldParallelize =
+    (Boolean(config.parallelReview) || (diffLikelyTruncated && strategy !== "diff-only")) &&
+    filesWithDiff.length > 1 &&
+    strategy !== "diff-only";
   const maxConcurrency =
     typeof config.parallelReview === "number" && config.parallelReview > 0 ? config.parallelReview : 3;
 
@@ -388,7 +402,7 @@ async function executeYooReview(
     progress(
       7,
       STAGES.review,
-      `Reviewing ${filesWithDiff.length} files in parallel with ${secondaryModelLabel(modelConfig)}…`,
+      `Reviewing ${filesWithDiff.length} files in parallel with ${secondaryModelLabel(modelConfig)}${diffLikelyTruncated && !config.parallelReview ? " (auto: diff too large for single review)" : ""}…`,
     );
 
     const sharedContextEstimate = [sessionContext, conventionsText, preReviewOutput, description].join("\n");
@@ -471,6 +485,7 @@ async function executeYooReview(
         signal,
         sessionManager: ctx.sessionManager,
         relevantPaths: [p.file],
+        nativeJson,
       });
       return { review: result.review, usage: result.usage, dropped: p.fileResult.dropped };
     });
@@ -563,6 +578,7 @@ async function executeYooReview(
         sessionManager: ctx.sessionManager,
         relevantPaths: Array.from(new Set([...(options.files ?? []), ...changedFiles])),
         progress,
+        nativeJson,
       });
     } catch (err) {
       return {
@@ -683,6 +699,7 @@ async function executeYooTest(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "test", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   progress(1, STAGES.test, "Collecting diff…");
   const { diff, changedFiles } = getDiff(cwd, {
@@ -733,7 +750,7 @@ async function executeYooTest(
   });
   const fileContents = mapFileContentEntries(fileResult.entries);
 
-  const { system, user } = buildTestPrompt(description, diff, fileContents, testOutput, conventionsText);
+  const { system, user } = buildTestPrompt(description, diff, fileContents, testOutput, conventionsText, nativeJson);
   progress(6, STAGES.test, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
@@ -741,6 +758,7 @@ async function executeYooTest(
     cwd,
     sessionManager: ctx.sessionManager,
     task: "test",
+    structuredOutput: true,
   });
 
   progress(7, STAGES.test, "Parsing test result…");
@@ -788,6 +806,7 @@ async function executeYooSecurity(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "security", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   const sessionContext = getSessionContext(ctx);
   const conventions = loadConventions(cwd);
@@ -840,7 +859,7 @@ async function executeYooSecurity(
   });
   const fileContents = mapFileContentEntries(fileResult.entries);
 
-  const { system, user } = buildSecurityPrompt(description, diff, fileContents, conventionsText);
+  const { system, user } = buildSecurityPrompt(description, diff, fileContents, conventionsText, nativeJson);
   progress(4, STAGES.security, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
@@ -848,6 +867,7 @@ async function executeYooSecurity(
     cwd,
     sessionManager: ctx.sessionManager,
     task: "security",
+    structuredOutput: true,
   });
 
   progress(5, STAGES.security, "Parsing security audit…");
@@ -885,12 +905,13 @@ async function executeYooSuggest(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "suggest", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   progress(1, STAGES.suggest, "Loading project conventions…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
-  const { system, user } = buildSuggestPrompt(question, conventionsText);
+  const { system, user } = buildSuggestPrompt(question, conventionsText, nativeJson);
   progress(2, STAGES.suggest, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
@@ -898,6 +919,7 @@ async function executeYooSuggest(
     cwd,
     sessionManager,
     task: "suggest",
+    structuredOutput: true,
   });
 
   progress(3, STAGES.suggest, "Parsing suggestions…");
@@ -932,6 +954,7 @@ async function executeYooRecommend(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "recommend", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   const state = getState(cwd);
 
@@ -939,7 +962,7 @@ async function executeYooRecommend(
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
-  const { system, user } = buildRecommendPrompt(situation, state.plan?.todo, conventionsText);
+  const { system, user } = buildRecommendPrompt(situation, state.plan?.todo, conventionsText, nativeJson);
   progress(2, STAGES.recommend, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
@@ -947,6 +970,7 @@ async function executeYooRecommend(
     cwd,
     sessionManager,
     task: "recommend",
+    structuredOutput: true,
   });
 
   progress(3, STAGES.recommend, "Parsing recommendation…");
@@ -985,6 +1009,7 @@ async function executeYooJudge(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "judge", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   const state = getState(cwd);
   const reviewHistory = buildReviewHistory(cwd);
@@ -1002,6 +1027,7 @@ async function executeYooJudge(
     conventionsText,
     undefined,
     memoryContext,
+    nativeJson,
   );
 
   progress(2, STAGES.judge, `Calling ${secondaryModelLabel(modelConfig)}…`);
@@ -1011,6 +1037,7 @@ async function executeYooJudge(
     cwd,
     sessionManager,
     task: "judge",
+    structuredOutput: true,
   });
 
   progress(3, STAGES.judge, "Parsing judgment…");
@@ -1048,11 +1075,12 @@ async function executeYooScan(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "scan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
+  const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig);
 
   progress(1, STAGES.scan, "Scanning local project conventions…");
   const localScan = scanProjectConventions(cwd);
 
-  const { system, user } = buildScanPrompt();
+  const { system, user } = buildScanPrompt(nativeJson);
   const configFilesText = formatConfigFiles(cwd);
 
   const deepScanEnabled = deepOverride ?? config.deepScan;
@@ -1104,7 +1132,7 @@ async function executeYooScan(
     modelConfig.id,
     system,
     `${user}\n\nFiles:\n${filesForPrompt.join("\n")}${configFilesText}${deepScanText}`,
-    { signal, thinking: modelConfig.thinking, cwd, sessionManager, task: "scan" },
+    { signal, thinking: modelConfig.thinking, cwd, sessionManager, task: "scan", structuredOutput: true },
   );
 
   progress(3, STAGES.scan, "Merging conventions…");
@@ -1274,6 +1302,7 @@ interface ReviewBatchInput {
   sessionManager?: ExtensionContext["sessionManager"];
   relevantPaths: string[];
   progress?: ProgressReporter;
+  nativeJson?: boolean;
 }
 
 async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: ReviewResult; usage: UsageCost }> {
@@ -1296,6 +1325,7 @@ async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: Review
     sessionManager,
     relevantPaths,
     progress,
+    nativeJson,
   } = input;
 
   const systemPromptEstimate = 1000;
@@ -1321,6 +1351,7 @@ async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: Review
       truncated: diffTruncated,
       droppedFiles,
       budgetNote: `Context window: ${budget.contextWindow.toLocaleString()} tokens. Reserved output: ${budget.reservedOutputTokens.toLocaleString()}. Available for context: ${budget.availableInputTokens.toLocaleString()}.`,
+      nativeJson,
     },
   );
 
@@ -1332,6 +1363,7 @@ async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: Review
     sessionManager,
     relevantPaths,
     task: "review",
+    structuredOutput: true,
   });
 
   const review = parseStructuredResult(cwd, raw, {

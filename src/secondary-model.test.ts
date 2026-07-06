@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { callSecondaryModel, setPiSpawnResolver } from "./secondary-model.js";
+import { callSecondaryModel, providerSupportsJsonObject, setPiSpawnResolver } from "./secondary-model.js";
 
 function makeTempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -342,5 +342,125 @@ console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content
     });
 
     assert.equal(content, "anthropic:claude-3-5-sonnet");
+  });
+
+  it("adds response_format json_object for supported providers when structuredOutput is true", async () => {
+    const cwd = makeTempDir("pi-heyyoo-http-json-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini", backend: "http", apiKey: "sk-test" });
+
+    let body: Record<string, unknown> = {};
+    global.fetch = async (_url, init) => {
+      body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: "{}" } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+        text: async () => "",
+      } as Response;
+    };
+
+    await callSecondaryModel("openai", "gpt-4o-mini", "system", "user", {
+      thinking: "off",
+      cwd,
+      structuredOutput: true,
+    });
+
+    assert.deepEqual(body.response_format, { type: "json_object" });
+  });
+
+  it("omits response_format for unsupported providers even when structuredOutput is true", async () => {
+    const cwd = makeTempDir("pi-heyyoo-http-no-json-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "anthropic", id: "claude-3-5-sonnet", backend: "http", apiKey: "sk-test" });
+
+    let body: Record<string, unknown> = {};
+    global.fetch = async (_url, init) => {
+      body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [{ type: "text", text: "{}" }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        text: async () => "",
+      } as Response;
+    };
+
+    await callSecondaryModel("anthropic", "claude-3-5-sonnet", "system", "user", {
+      thinking: "off",
+      cwd,
+      structuredOutput: true,
+    });
+
+    assert.equal("response_format" in body, false);
+  });
+
+  it("omits response_format when structuredOutput is false", async () => {
+    const cwd = makeTempDir("pi-heyyoo-http-no-struct-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini", backend: "http", apiKey: "sk-test" });
+
+    let body: Record<string, unknown> = {};
+    global.fetch = async (_url, init) => {
+      body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: "hi" } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+        text: async () => "",
+      } as Response;
+    };
+
+    await callSecondaryModel("openai", "gpt-4o-mini", "system", "user", {
+      thinking: "off",
+      cwd,
+      structuredOutput: false,
+    });
+
+    assert.equal("response_format" in body, false);
+  });
+});
+
+describe("providerSupportsJsonObject", () => {
+  it("returns true for known OpenAI-compatible providers", () => {
+    assert.equal(providerSupportsJsonObject("openai"), true);
+    assert.equal(providerSupportsJsonObject("deepseek"), true);
+    assert.equal(providerSupportsJsonObject("openrouter"), true);
+  });
+
+  it("returns false for Anthropic", () => {
+    assert.equal(providerSupportsJsonObject("anthropic"), false);
+  });
+
+  it("returns true for custom OpenAI-compatible baseUrl", () => {
+    assert.equal(
+      providerSupportsJsonObject("custom", {
+        provider: "custom",
+        id: "x",
+        baseUrl: "https://example.com/v1",
+        style: "openai-compatible",
+      }),
+      true,
+    );
+  });
+
+  it("returns false for custom Anthropic-compatible baseUrl", () => {
+    assert.equal(
+      providerSupportsJsonObject("custom", {
+        provider: "custom",
+        id: "x",
+        baseUrl: "https://example.com/v1",
+        style: "anthropic",
+      }),
+      false,
+    );
   });
 });

@@ -209,6 +209,8 @@ export interface ProviderApiInfo {
   authHeader: string;
   authPrefix: string;
   queryAuthKey?: string;
+  /** Whether the provider supports OpenAI-style response_format: { type: "json_object" }. */
+  supportsJsonObject?: boolean;
 }
 
 export interface CallSecondaryModelOptions {
@@ -224,6 +226,8 @@ export interface CallSecondaryModelOptions {
   relevantPaths?: string[];
   /** Yoo task to resolve a per-task model override from settings. */
   task?: YooModelTask;
+  /** When true, request native structured JSON output if the provider supports it. */
+  structuredOutput?: boolean;
 }
 
 export interface MemoryEntry {
