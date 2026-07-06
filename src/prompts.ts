@@ -837,3 +837,60 @@ export function salvageJudgeFromMarkdown(raw: string): import("./types.js").Judg
     summary,
   };
 }
+
+export function salvagePlanFromMarkdown(raw: string, fallbackTask: string): import("./types.js").PlanResult | null {
+  const text = raw.trim();
+  if (!text) return null;
+
+  // Summary: first H1/H2 heading or first non-empty paragraph.
+  const headingMatch = text.match(/^#+\s+(.+)$/m);
+  const firstPara = text.split(/\n\s*\n/)[0]?.trim() ?? "";
+  const summary = headingMatch?.[1].trim() || firstPara.slice(0, 200);
+
+  // Todo: numbered lists (1. ...) or bullets (- / *).
+  const todos: Array<string | { description: string }> = [];
+  const numberedRegex = /^\d+\.\s+(.+)$/gm;
+  const bulletRegex = /^[-*]\s+(?:\[.\]\s+)?(.+)$/gm;
+
+  let match: RegExpExecArray | null;
+  while ((match = numberedRegex.exec(text)) !== null) {
+    const line = match[1].trim();
+    if (line && !line.toLowerCase().startsWith("option ")) {
+      todos.push(line);
+    }
+  }
+  if (todos.length === 0) {
+    while ((match = bulletRegex.exec(text)) !== null) {
+      const line = match[1].trim();
+      if (line && line.length > 5 && !line.toLowerCase().startsWith("option ")) {
+        todos.push(line);
+      }
+    }
+  }
+
+  // Acceptance criteria: section after "Acceptance" heading.
+  const criteria: string[] = [];
+  const acSectionMatch = text.match(/(?:acceptance\s*(?:criteria)?)[\s:]*\n+([\s\S]*?)(?=\n#+\s|\n\n##|$)/i);
+  if (acSectionMatch) {
+    const acText = acSectionMatch[1];
+    const acBulletRegex = /^[-*]\s+(.+)$/gm;
+    while ((match = acBulletRegex.exec(acText)) !== null) {
+      const line = match[1].trim();
+      if (line) criteria.push(line);
+    }
+  }
+
+  if (todos.length === 0 && summary.length < 10) {
+    return null;
+  }
+
+  if (todos.length === 0) {
+    todos.push(fallbackTask);
+  }
+
+  return {
+    summary,
+    todo: todos.slice(0, 10),
+    acceptanceCriteria: criteria.slice(0, 5),
+  };
+}

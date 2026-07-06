@@ -23,6 +23,7 @@ import {
   parseJsonResponse,
   salvageReviewFromMarkdown,
   salvageJudgeFromMarkdown,
+  salvagePlanFromMarkdown,
   validatePlanResult,
   validateReviewResult,
   validateSuggestResult,
@@ -33,6 +34,7 @@ import {
   validateConventionsResult,
   getJsonParseError,
   getReviewValidationErrors,
+  getPlanValidationErrors,
   getSuggestValidationErrors,
   getRecommendValidationErrors,
   getJudgeValidationErrors,
@@ -249,20 +251,55 @@ async function executeYooPlan(
 
   progress(3, STAGES.plan, "Parsing plan…");
   const parsed = parseJsonResponse(raw);
-  const plan = validatePlanResult(parsed);
+  let plan = validatePlanResult(parsed);
+  let cost = recordCostWithBudget(cwd, usage);
 
   if (!plan) {
-    logEvent(cwd, "warn", "Failed to parse plan from secondary model response", { raw: raw.slice(0, 2000) });
-    return {
-      action: "plan",
-      error: "Failed to parse plan from secondary model response.",
-      plan: { todo: [task], acceptanceCriteria: [], summary: raw.slice(0, 200) },
-      cost: recordCostWithBudget(cwd, usage),
-    };
+    logEvent(cwd, "warn", "Failed to parse plan from secondary model response, retrying with reasoning off", {
+      raw: raw.slice(0, 2000),
+      parseError: getJsonParseError(raw),
+      validationErrors: parsed ? getPlanValidationErrors(parsed) : [],
+    });
+    progress(3, STAGES.plan, "Parsing failed, retrying with reasoning off…");
+    const { content: rawRetry, usage: usageRetry } = await callSecondaryModel(
+      modelConfig.provider,
+      modelConfig.id,
+      system,
+      `${user}\n\nCRITICAL: Your previous response could not be parsed. Return ONLY the required JSON object directly, with no markdown fences, no explanations, no wrapper objects (like { "response": "..." }), and no extra text.`,
+      { signal, thinking: "off", cwd, sessionManager, task: "plan" },
+    );
+    const parsedRetry = parseJsonResponse(rawRetry);
+    const planRetry = validatePlanResult(parsedRetry);
+    if (planRetry) {
+      plan = planRetry;
+      cost = mergeUsageCost(cost, recordCostWithBudget(cwd, usageRetry));
+    } else {
+      const salvaged = salvagePlanFromMarkdown(rawRetry, task) ?? salvagePlanFromMarkdown(raw, task);
+      if (salvaged) {
+        logEvent(cwd, "info", "Salvaged plan from markdown response", {
+          todoCount: salvaged.todo.length,
+          summary: salvaged.summary.slice(0, 100),
+        });
+        plan = salvaged;
+        cost = mergeUsageCost(cost, recordCostWithBudget(cwd, usageRetry));
+      } else {
+        logEvent(cwd, "warn", "Failed to parse plan from secondary model response after retry", {
+          raw: rawRetry.slice(0, 2000),
+          parseError: getJsonParseError(rawRetry),
+          validationErrors: parsedRetry ? getPlanValidationErrors(parsedRetry) : [],
+        });
+        return {
+          action: "plan",
+          error: "Failed to parse plan from secondary model response.",
+          plan: { todo: [task], acceptanceCriteria: [], summary: raw.slice(0, 200) },
+          cost,
+        };
+      }
+    }
   }
 
   setPlan(cwd, plan);
-  return { action: "plan", plan, cost: recordCostWithBudget(cwd, usage) };
+  return { action: "plan", plan, cost };
 }
 
 async function executeYooReview(

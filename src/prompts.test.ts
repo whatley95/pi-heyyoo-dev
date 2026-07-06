@@ -4,6 +4,7 @@ import {
   parseJsonResponse,
   salvageReviewFromMarkdown,
   salvageJudgeFromMarkdown,
+  salvagePlanFromMarkdown,
   validateReviewResult,
   validateJudgeResult,
   validateConventionsResult,
@@ -97,6 +98,32 @@ describe("salvageJudgeFromMarkdown", () => {
     assert.equal(result?.verdict, "blocked");
     assert.equal(result?.suggestions.length, 2);
     assert.equal(result?.consensus, false);
+  });
+});
+
+describe("salvagePlanFromMarkdown", () => {
+  it("extracts todo list and summary from markdown", () => {
+    const text = `# Plan
+
+Investigate and restore the build script.
+
+1. Check existing scripts
+2. Verify angular.json config
+3. Add or restore build:hw
+
+Acceptance criteria:
+- build:hw runs successfully
+- hw config exists`;
+    const result = salvagePlanFromMarkdown(text, "fallback");
+    assert.equal(result?.summary, "Plan");
+    assert.equal(result?.todo.length, 3);
+    assert.equal(result?.acceptanceCriteria.length, 2);
+  });
+
+  it("falls back to task when no list found", () => {
+    const result = salvagePlanFromMarkdown("Just do the thing.", "fallback task");
+    assert.equal(result?.todo.length, 1);
+    assert.equal(result?.todo[0], "fallback task");
   });
 });
 
