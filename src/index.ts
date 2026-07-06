@@ -51,6 +51,7 @@ import type {
   HeyyooSessionState,
   PlanResult,
   YooAction,
+  YooModelTask,
   UsageCost,
   SecondaryModelConfig,
   ReviewResult,
@@ -1421,6 +1422,7 @@ interface InvalidParams {
 type ValidationResult = ValidatedParams | InvalidParams;
 
 const YOO_ACTIONS: YooAction[] = ["plan", "review", "suggest", "recommend", "judge", "scan", "test", "security"];
+const YOO_MODEL_TASKS: YooModelTask[] = [...YOO_ACTIONS, "explain"];
 
 function validateYooToolParams(params: unknown): ValidationResult {
   if (!params || typeof params !== "object") {
@@ -2435,10 +2437,10 @@ export default function (pi: ExtensionAPI) {
         const currentConfig = loadHeyyooConfig(ctx.cwd);
 
         // 1. Pick which yoo tool this model is for.
-        const scopeOptions = ["Base secondary model", ...YOO_ACTIONS.map((a) => `Use for ${a} only`)];
+        const scopeOptions = ["Base secondary model", ...YOO_MODEL_TASKS.map((a) => `Use for ${a} only`)];
         const currentScope = (() => {
           if (currentConfig.secondary.provider && currentConfig.secondary.id) return "Base secondary model";
-          const action = YOO_ACTIONS.find((a) => {
+          const action = YOO_MODEL_TASKS.find((a) => {
             const override = currentConfig.taskModels?.[a];
             return override?.provider && override?.id;
           });
@@ -2446,7 +2448,7 @@ export default function (pi: ExtensionAPI) {
         })();
         const scopeModelText = (scope: string): string => {
           const isBase = scope === "Base secondary model";
-          const action = isBase ? undefined : (scope.replace(/^Use for /, "").replace(/ only$/, "") as YooAction);
+          const action = isBase ? undefined : (scope.replace(/^Use for /, "").replace(/ only$/, "") as YooModelTask);
           const model = isBase ? currentConfig.secondary : resolveTaskModel(currentConfig, action!);
           if (!model.provider || !model.id) return "not configured";
           return `${model.provider}:${model.id}${model.thinking ? ` · ${model.thinking}` : ""}`;
@@ -2460,7 +2462,7 @@ export default function (pi: ExtensionAPI) {
         const action =
           scope === "Base secondary model"
             ? undefined
-            : (scope.replace(/^Use for /, "").replace(/ only$/, "") as YooAction);
+            : (scope.replace(/^Use for /, "").replace(/ only$/, "") as YooModelTask);
 
         const target = action ? currentConfig.taskModels?.[action] : currentConfig.secondary;
         const effectiveProvider = target?.provider || currentConfig.secondary.provider;
@@ -2536,7 +2538,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}).`, "info");
         } else {
           const taskModels = (yooSettings.taskModels as Record<string, unknown>) || {};
-          const taskAction = action as YooAction;
+          const taskAction = action as YooModelTask;
           taskModels[taskAction] = { provider, id: modelId, thinking };
           yooSettings.taskModels = taskModels;
           ctx.ui.notify(`Task model for ${taskAction} set to ${provider}:${modelId} (${thinking}).`, "info");
@@ -2762,17 +2764,17 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("yoo-test", {
     description:
-      "Test connectivity to configured secondary models. Optional: /yoo-test <plan|review|suggest|recommend|judge|scan>",
+      "Test connectivity to configured secondary models. Optional: /yoo-test <plan|review|suggest|recommend|judge|scan|explain>",
     handler: async (args, ctx) => {
       const config = loadHeyyooConfig(ctx.cwd);
       const requestedTask = args.trim().toLowerCase();
-      const task = YOO_ACTIONS.find((action) => action === requestedTask);
+      const task = YOO_MODEL_TASKS.find((action) => action === requestedTask);
       if (requestedTask && !task) {
-        ctx.ui.notify(`Unknown yoo task "${requestedTask}". Use one of: ${YOO_ACTIONS.join(", ")}.`, "warn");
+        ctx.ui.notify(`Unknown yoo task "${requestedTask}". Use one of: ${YOO_MODEL_TASKS.join(", ")}.`, "warn");
         return;
       }
 
-      const tests: { task?: YooAction; model: SecondaryModelConfig; label: string }[] = [];
+      const tests: { task?: YooModelTask; model: SecondaryModelConfig; label: string }[] = [];
       if (task) {
         const model = resolveTaskModel(config, task);
         tests.push({ task, model, label: secondaryModelLabel(model) });
@@ -2781,7 +2783,7 @@ export default function (pi: ExtensionAPI) {
           tests.push({ model: config.secondary, label: secondaryModelLabel(config.secondary) });
         }
         const defaultKey = `${config.secondary.provider}:${config.secondary.id}:${config.secondary.backend ?? "pi"}:${config.secondary.baseUrl ?? ""}`;
-        for (const action of YOO_ACTIONS) {
+        for (const action of YOO_MODEL_TASKS) {
           const override = config.taskModels?.[action];
           if (!override?.provider && !override?.id) continue;
           const model = resolveTaskModel(config, action);
@@ -2812,7 +2814,7 @@ export default function (pi: ExtensionAPI) {
       const totalStages = runnableTests.length * 3;
       interface TestResult {
         label: string;
-        task?: YooAction;
+        task?: YooModelTask;
         provider: string;
         id: string;
         backend?: string;
@@ -3094,7 +3096,7 @@ async function showYooStatus(ctx: ExtensionContext): Promise<void> {
     return `${model.provider}:${model.id}${backend}${thinking}`;
   }
 
-  const taskModelEntries = YOO_ACTIONS.filter((a) => {
+  const taskModelEntries = YOO_MODEL_TASKS.filter((a) => {
     const override = config.taskModels?.[a];
     return override?.provider || override?.id;
   });

@@ -8,7 +8,16 @@ export function createProgressReporter(
   ctx: ExtensionContext,
   onUpdate?: (update: unknown) => void,
 ): ProgressReporter {
+  let startTime = 0;
+
   return (stage: number, total: number, message: string) => {
+    if (startTime === 0) {
+      startTime = Date.now();
+    }
+
+    const elapsedMs = Date.now() - startTime;
+    const elapsedText = elapsedMs > 1000 ? ` (${(elapsedMs / 1000).toFixed(1)}s)` : "";
+
     if (stage >= total) {
       clearYooStatus(ctx);
       if (onUpdate) {
@@ -40,7 +49,7 @@ export function createProgressReporter(
     }
 
     try {
-      ctx.ui.setStatus("yoo", `[${stage}/${total}] ${message}`);
+      ctx.ui.setStatus("yoo", `[${stage}/${total}] ${message}${elapsedText}`);
     } catch {
       // setStatus may not be available in all modes; ignore.
     }
