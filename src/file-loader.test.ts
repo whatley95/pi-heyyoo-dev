@@ -26,8 +26,8 @@ describe("file-loader", () => {
     assert.equal(isReviewableFile("src/small.ts"), true);
   });
 
-  it("loads small files in full", () => {
-    const result = loadFileContentsForReview({
+  it("loads small files in full", async () => {
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/small.ts"],
       budget,
@@ -39,8 +39,8 @@ describe("file-loader", () => {
     assert.ok(result.entries[0].content.includes("foo"));
   });
 
-  it("uses outline for large files", () => {
-    const result = loadFileContentsForReview({
+  it("uses outline for large files", async () => {
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/large.ts"],
       budget,
@@ -53,8 +53,8 @@ describe("file-loader", () => {
     assert.ok(result.entries[0].content.length < 500 * "export const x = 1;".length);
   });
 
-  it("returns empty for diff-only strategy", () => {
-    const result = loadFileContentsForReview({
+  it("returns empty for diff-only strategy", async () => {
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/small.ts"],
       budget,
@@ -64,9 +64,9 @@ describe("file-loader", () => {
     assert.equal(result.entries.length, 0);
   });
 
-  it("clamps total tokens to hard input cap", () => {
+  it("clamps total tokens to hard input cap", async () => {
     const capped: ReviewBudget = { ...budget, availableInputTokens: 100_000, hardInputCap: 10 };
-    const result = loadFileContentsForReview({
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/small.ts", "src/large.ts"],
       budget: capped,
@@ -77,8 +77,8 @@ describe("file-loader", () => {
     assert.ok(result.dropped.length > 0);
   });
 
-  it("drops files outside project root", () => {
-    const result = loadFileContentsForReview({
+  it("drops files outside project root", async () => {
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["../outside.ts", "src/small.ts"],
       budget,
@@ -89,8 +89,8 @@ describe("file-loader", () => {
     assert.equal(result.dropped.includes("../outside.ts"), true);
   });
 
-  it("deduplicates repeated file paths", () => {
-    const result = loadFileContentsForReview({
+  it("deduplicates repeated file paths", async () => {
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/small.ts", "src/small.ts"],
       budget,
@@ -100,9 +100,9 @@ describe("file-loader", () => {
     assert.equal(result.entries.length, 1);
   });
 
-  it("counts lines correctly when file ends with a newline", () => {
+  it("counts lines correctly when file ends with a newline", async () => {
     writeFileSync(join(cwd, "src/exact.ts"), "line1\nline2\nline3\n");
-    const result = loadFileContentsForReview({
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/exact.ts"],
       budget,
@@ -113,8 +113,8 @@ describe("file-loader", () => {
     assert.equal(result.entries[0].mode, "full");
   });
 
-  it("does not fall back to outlines in full-files strategy", () => {
-    const result = loadFileContentsForReview({
+  it("does not fall back to outlines in full-files strategy", async () => {
+    const result = await loadFileContentsForReview({
       cwd,
       changedFiles: ["src/large.ts"],
       budget: { ...budget, availableInputTokens: 100 },

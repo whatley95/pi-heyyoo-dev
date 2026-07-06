@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { estimateTokens } from "./token-budget.js";
 import type { ReviewBudget } from "./token-budget.js";
 import { resolveProjectPath } from "./path-security.js";
@@ -32,11 +32,11 @@ export interface LoadFileContentsOptions {
 
 const MAX_REVIEW_FILES = 200;
 
-export function loadFileContentsForReview(options: LoadFileContentsOptions): {
+export async function loadFileContentsForReview(options: LoadFileContentsOptions): Promise<{
   entries: FileContentEntry[];
   dropped: string[];
   totalTokens: number;
-} {
+}> {
   const { cwd, changedFiles, budget, strategy, fullFileThresholdLines } = options;
   const uniqueFiles = Array.from(new Set(changedFiles));
   const reviewable = uniqueFiles.filter(isReviewableFile);
@@ -46,15 +46,18 @@ export function loadFileContentsForReview(options: LoadFileContentsOptions): {
     return { entries: [], dropped, totalTokens: 0 };
   }
 
-  // Load full content for each reviewable file and estimate tokens.
+  // Load full content for each reviewable file in parallel and estimate tokens.
+  const loadResults = await Promise.all(
+    reviewable.map(async (file) => {
+      const safePath = resolveProjectPath(cwd, file);
+      if (!safePath) return { file, content: null };
+      const content = await readTextFile(safePath);
+      return { file, content };
+    }),
+  );
+
   const loaded: Array<FileContentEntry & { preferFull: boolean }> = [];
-  for (const file of reviewable) {
-    const safePath = resolveProjectPath(cwd, file);
-    if (!safePath) {
-      dropped.push(file);
-      continue;
-    }
-    const content = readTextFile(safePath);
+  for (const { file, content } of loadResults) {
     if (content === null) {
       dropped.push(file);
       continue;
@@ -148,12 +151,11 @@ export function loadFileContentsForReview(options: LoadFileContentsOptions): {
 
 const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
-function readTextFile(path: string): string | null {
-  if (!existsSync(path)) return null;
+async function readTextFile(path: string): Promise<string | null> {
   try {
-    const stats = statSync(path);
+    const stats = await stat(path);
     if (stats.size > MAX_FILE_SIZE_BYTES) return null;
-    return readFileSync(path, "utf-8");
+    return await readFile(path, "utf-8");
   } catch {
     return null;
   }

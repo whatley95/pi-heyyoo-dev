@@ -57,41 +57,42 @@ export interface PreReviewOutput {
 
 const INTERPRETER_COMMANDS = new Set(["node", "python", "python3", "ruby"]);
 
-export function runPreReviewCommands(cwd: string, commands: string[]): PreReviewOutput[] {
-  const results: PreReviewOutput[] = [];
-  for (const command of commands) {
-    try {
-      const { program, args } = parseCommand(command);
-      if (!ALLOWED_COMMANDS.has(program)) {
-        throw new Error(`Pre-review command "${program}" is not in the allowlist`);
+export async function runPreReviewCommands(cwd: string, commands: string[]): Promise<PreReviewOutput[]> {
+  const results = await Promise.all(
+    commands.map(async (command) => {
+      try {
+        const { program, args } = parseCommand(command);
+        if (!ALLOWED_COMMANDS.has(program)) {
+          throw new Error(`Pre-review command "${program}" is not in the allowlist`);
+        }
+        if (INTERPRETER_COMMANDS.has(program)) {
+          validateInterpreterArgs(program, args, cwd);
+        }
+        if (program === "npx") {
+          validateNpxArgs(args);
+        }
+        const output = execFileSync(program, args, {
+          cwd,
+          encoding: "utf-8",
+          maxBuffer: 1024 * 1024,
+          timeout: 60000,
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        });
+        return { command, output: truncateOutput(output), exitCode: 0 };
+      } catch (err) {
+        logEvent(cwd, "warn", "Pre-review command failed", {
+          command,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        const execErr = err as { stdout?: string; stderr?: string; status?: number };
+        const output = typeof execErr.stdout === "string" ? execErr.stdout : "";
+        const stderr = typeof execErr.stderr === "string" ? execErr.stderr : "";
+        const status = typeof execErr.status === "number" ? execErr.status : 1;
+        return { command, output: truncateOutput(`${output}\n${stderr}`), exitCode: status };
       }
-      if (INTERPRETER_COMMANDS.has(program)) {
-        validateInterpreterArgs(program, args, cwd);
-      }
-      if (program === "npx") {
-        validateNpxArgs(args);
-      }
-      const output = execFileSync(program, args, {
-        cwd,
-        encoding: "utf-8",
-        maxBuffer: 1024 * 1024,
-        timeout: 60000,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      results.push({ command, output: truncateOutput(output), exitCode: 0 });
-    } catch (err) {
-      logEvent(cwd, "warn", "Pre-review command failed", {
-        command,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      const execErr = err as { stdout?: string; stderr?: string; status?: number };
-      const output = typeof execErr.stdout === "string" ? execErr.stdout : "";
-      const stderr = typeof execErr.stderr === "string" ? execErr.stderr : "";
-      const status = typeof execErr.status === "number" ? execErr.status : 1;
-      results.push({ command, output: truncateOutput(`${output}\n${stderr}`), exitCode: status });
-    }
-  }
+    }),
+  );
   return results;
 }
 

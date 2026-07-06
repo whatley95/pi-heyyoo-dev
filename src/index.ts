@@ -101,8 +101,8 @@ const STAGES = {
   recommend: 3,
   judge: 3,
   scan: 4,
-  test: 5,
-  security: 4,
+  test: 7,
+  security: 5,
 } as const;
 
 function secondaryModelLabel(secondary: SecondaryModelConfig): string {
@@ -362,7 +362,7 @@ async function executeYooReview(
   let preReviewOutput = "";
   if (config.preReviewCommands && config.preReviewCommands.length > 0) {
     progress(4, STAGES.review, "Running pre-review commands…");
-    const results = runPreReviewCommands(cwd, config.preReviewCommands);
+    const results = await runPreReviewCommands(cwd, config.preReviewCommands);
     preReviewOutput = formatPreReviewOutput(results);
     const preReviewChars = baseBudget.availableInputTokens * 4;
     if (preReviewChars <= 0) {
@@ -407,7 +407,11 @@ async function executeYooReview(
   let finalDroppedFiles: string[];
 
   if (shouldParallelize) {
-    progress(7, STAGES.review, `Reviewing ${filesWithDiff.length} files in parallel…`);
+    progress(
+      7,
+      STAGES.review,
+      `Reviewing ${filesWithDiff.length} files in parallel with ${secondaryModelLabel(modelConfig)}…`,
+    );
 
     const sharedContextEstimate = [sessionContext, conventionsText, preReviewOutput, description].join("\n");
     const outputEstimate =
@@ -419,36 +423,37 @@ async function executeYooReview(
       file: string;
       fileMemoryContext: string;
       fileBudget: ReviewBudget;
-      fileResult: ReturnType<typeof loadFileContentsForReview>;
+      fileResult: Awaited<ReturnType<typeof loadFileContentsForReview>>;
       droppedForBudget: string[];
     }
-    const preps: FilePrep[] = [];
-    for (const file of filesWithDiff) {
-      const fileMemoryContext = getPastIssuesForFiles(cwd, [file]);
-      const fileBudget = calculateReviewBudget(
-        modelConfig.provider,
-        modelConfig.id,
-        config,
-        {
-          systemPrompt: "",
-          sessionContext,
-          conventionsText,
-          preReviewOutput,
-          description,
-          memoryContext: fileMemoryContext,
-        },
-        modelConfig,
-      );
-      const fileResult = loadFileContentsForReview({
-        cwd,
-        changedFiles: [file],
-        budget: fileBudget,
-        strategy,
-        fullFileThresholdLines,
-      });
-      const droppedForBudget = fileResult.dropped.filter((f) => isReviewableFile(f));
-      preps.push({ file, fileMemoryContext, fileBudget, fileResult, droppedForBudget });
-    }
+    const preps = await Promise.all(
+      filesWithDiff.map(async (file): Promise<FilePrep> => {
+        const fileMemoryContext = getPastIssuesForFiles(cwd, [file]);
+        const fileBudget = calculateReviewBudget(
+          modelConfig.provider,
+          modelConfig.id,
+          config,
+          {
+            systemPrompt: "",
+            sessionContext,
+            conventionsText,
+            preReviewOutput,
+            description,
+            memoryContext: fileMemoryContext,
+          },
+          modelConfig,
+        );
+        const fileResult = await loadFileContentsForReview({
+          cwd,
+          changedFiles: [file],
+          budget: fileBudget,
+          strategy,
+          fullFileThresholdLines,
+        });
+        const droppedForBudget = fileResult.dropped.filter((f) => isReviewableFile(f));
+        return { file, fileMemoryContext, fileBudget, fileResult, droppedForBudget };
+      }),
+    );
 
     let projectedCost = 0;
     for (const p of preps) {
@@ -539,7 +544,7 @@ async function executeYooReview(
     const fileResult =
       strategy === "diff-only"
         ? { entries: [] as FileContentEntry[], dropped: [] as string[], totalTokens: 0 }
-        : loadFileContentsForReview({
+        : await loadFileContentsForReview({
             cwd,
             changedFiles,
             budget: budgetWithPreReview,
@@ -579,6 +584,7 @@ async function executeYooReview(
         signal,
         sessionManager: ctx.sessionManager,
         relevantPaths: Array.from(new Set([...(options.files ?? []), ...changedFiles])),
+        progress,
       });
     } catch (err) {
       return {
@@ -707,7 +713,7 @@ async function executeYooTest(
   const testCommand = options.command ?? config.testCommand ?? detectTestCommand(cwd, conventions);
   let testOutput: string;
   if (testCommand) {
-    const results = runPreReviewCommands(cwd, [testCommand]);
+    const results = await runPreReviewCommands(cwd, [testCommand]);
     testOutput = formatPreReviewOutput(results);
   } else {
     testOutput = "No test command was detected or configured. Falling back to static analysis of the diff.";
@@ -732,7 +738,7 @@ async function executeYooTest(
   progress(5, STAGES.test, "Loading changed file contents…");
   const strategy = config.reviewStrategy ?? "auto";
   const fullFileThresholdLines = config.reviewFullFileThresholdLines ?? 300;
-  const fileResult = loadFileContentsForReview({
+  const fileResult = await loadFileContentsForReview({
     cwd,
     changedFiles,
     budget,
@@ -742,6 +748,7 @@ async function executeYooTest(
   const fileContents = mapFileContentEntries(fileResult.entries);
 
   const { system, user } = buildTestPrompt(description, diff, fileContents, testOutput, conventionsText);
+  progress(6, STAGES.test, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
     thinking: modelConfig.thinking,
@@ -750,6 +757,7 @@ async function executeYooTest(
     task: "test",
   });
 
+  progress(7, STAGES.test, "Parsing test result…");
   const parsed = parseJsonResponse(raw);
   const test = validateTestResult(parsed);
   if (!test) {
@@ -832,7 +840,7 @@ async function executeYooSecurity(
   progress(3, STAGES.security, "Loading file contents…");
   const strategy = config.reviewStrategy ?? "auto";
   const fullFileThresholdLines = config.reviewFullFileThresholdLines ?? 300;
-  const fileResult = loadFileContentsForReview({
+  const fileResult = await loadFileContentsForReview({
     cwd,
     changedFiles,
     budget,
@@ -842,6 +850,7 @@ async function executeYooSecurity(
   const fileContents = mapFileContentEntries(fileResult.entries);
 
   const { system, user } = buildSecurityPrompt(description, diff, fileContents, conventionsText);
+  progress(4, STAGES.security, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
     thinking: modelConfig.thinking,
@@ -850,6 +859,7 @@ async function executeYooSecurity(
     task: "security",
   });
 
+  progress(5, STAGES.security, "Parsing security audit…");
   const parsed = parseJsonResponse(raw);
   const security = validateSecurityResult(parsed);
   if (!security) {
@@ -1304,6 +1314,7 @@ interface ReviewBatchInput {
   signal?: AbortSignal;
   sessionManager?: ExtensionContext["sessionManager"];
   relevantPaths: string[];
+  progress?: ProgressReporter;
 }
 
 async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: ReviewResult; usage: UsageCost }> {
@@ -1325,6 +1336,7 @@ async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: Review
     signal,
     sessionManager,
     relevantPaths,
+    progress,
   } = input;
 
   const systemPromptEstimate = 1000;
@@ -1353,6 +1365,7 @@ async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: Review
     },
   );
 
+  progress?.(8, STAGES.review, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
     thinking: capReviewThinking(modelConfig.thinking),
@@ -2048,11 +2061,14 @@ export default function (pi: ExtensionAPI) {
 
       if (r.verify === true && r.deep === true) {
         const progress = createProgressReporter("explain", ctx);
+        const learnConfig = loadHeyyooConfig(ctx.cwd);
+        const learnModelConfig = resolveTaskModel(learnConfig, "explain");
+        const learnModelLabel = secondaryModelLabel(learnModelConfig);
         const { results, cost } = await verifyLearnedFactsDeep(
           ctx.cwd,
           query,
           signal,
-          (current, total) => progress(current, total, `Verifying fact ${current}/${total}…`),
+          (current, total) => progress(current, total, `Verifying fact ${current}/${total} with ${learnModelLabel}…`),
           ctx.sessionManager,
         );
         const text = formatVerificationReport(results);
@@ -2631,11 +2647,14 @@ export default function (pi: ExtensionAPI) {
         if (deep) {
           const signal = undefined;
           const progress = createProgressReporter("explain", ctx);
+          const learnConfig = loadHeyyooConfig(ctx.cwd);
+          const learnModelConfig = resolveTaskModel(learnConfig, "explain");
+          const learnModelLabel = secondaryModelLabel(learnModelConfig);
           const { results, cost } = await verifyLearnedFactsDeep(
             ctx.cwd,
             query,
             signal,
-            (current, total) => progress(current, total, `Verifying fact ${current}/${total}…`),
+            (current, total) => progress(current, total, `Verifying fact ${current}/${total} with ${learnModelLabel}…`),
             ctx.sessionManager,
           );
           clearYooStatus(ctx);
