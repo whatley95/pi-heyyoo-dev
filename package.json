@@ -39,6 +39,9 @@
     "bump:major": "node scripts/bump-version.js major"
   },
   "license": "MIT",
+  "dependencies": {
+    "typescript": "^6.0.3"
+  },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.75.0",
     "@earendil-works/pi-coding-agent": ">=0.75.0",
@@ -61,7 +64,6 @@
     "globals": "^17.7.0",
     "prettier": "^3.9.4",
     "tsx": "^4.0.0",
-    "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.0"
   }
 }
