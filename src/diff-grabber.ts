@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { logEvent } from "./logger.js";
 import { isSafeRelativePath, validateRevision } from "./path-security.js";
 
-const DEFAULT_MAX_DIFF_CHARS = 6000;
+export const DEFAULT_MAX_DIFF_CHARS = 200_000;
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 
 export type VcsType = "git" | "svn";
@@ -336,7 +336,7 @@ function runGitUntrackedDiff(cwd: string, files: string[]): string {
   return diffs.join("\n");
 }
 
-function processDiff(diff: string, vcs: VcsType, maxDiffChars: number): DiffResult {
+export function processDiff(diff: string, vcs: VcsType, maxDiffChars: number): DiffResult {
   const changedFiles = extractChangedFiles(diff, vcs);
   if (diff.length <= maxDiffChars) {
     return { diff, truncated: false, changedFiles, vcs };

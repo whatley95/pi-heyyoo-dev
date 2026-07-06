@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyExclude, extractChangedFiles, splitDiffByFile } from "./diff-grabber.js";
+import {
+  applyExclude,
+  extractChangedFiles,
+  splitDiffByFile,
+  processDiff,
+  DEFAULT_MAX_DIFF_CHARS,
+} from "./diff-grabber.js";
 
 describe("diff-grabber helpers", () => {
   it("excludes matching SVN blocks", () => {
@@ -74,6 +80,24 @@ describe("diff-grabber helpers", () => {
     assert.deepEqual(extractChangedFiles(diff, "git"), ["src/merged.ts"]);
     const byFile = splitDiffByFile(diff, "git");
     assert.ok(byFile["src/merged.ts"]?.includes("+change"));
+  });
+
+  it("defaults to a large max diff char limit", () => {
+    assert.equal(DEFAULT_MAX_DIFF_CHARS, 200_000);
+  });
+
+  it("does not truncate diffs larger than the old default", () => {
+    const diff = "diff --git a/src/foo.ts b/src/foo.ts\n+" + "x".repeat(7000);
+    const result = processDiff(diff, "git", DEFAULT_MAX_DIFF_CHARS);
+    assert.equal(result.truncated, false);
+    assert.ok(result.diff.length > 6000);
+  });
+
+  it("still truncates diffs that exceed the max char limit", () => {
+    const diff = "diff --git a/src/foo.ts b/src/foo.ts\n+" + "x".repeat(300);
+    const result = processDiff(diff, "git", 250);
+    assert.equal(result.truncated, true);
+    assert.ok(result.diff.endsWith("\n... diff truncated (too large)"));
   });
 
   it("does not exclude prefix-matching SVN blocks", () => {

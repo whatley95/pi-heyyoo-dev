@@ -105,11 +105,17 @@ Verdict: pass
     assert.equal(result?.consensus, false);
   });
 
-  it("extracts blocked verdict", () => {
-    const text = "This is broken and cannot work.\n\n- Fix the crash";
+  it("extracts blocked verdict from explicit line", () => {
+    const text = "Verdict: blocked\n\n- Fix the crash";
     const result = salvageReviewFromMarkdown(text);
     assert.equal(result?.verdict, "blocked");
     assert.equal(result?.suggestions.length, 1);
+  });
+
+  it("does not infer blocked from prose keyword", () => {
+    const text = "The model discussed how the change could be blocked by policy, but no explicit verdict was given.";
+    const result = salvageReviewFromMarkdown(text);
+    assert.equal(result?.verdict, "needs-work");
   });
 });
 
@@ -215,6 +221,172 @@ Missing tests:
 - Possible auth bypass in route guard`);
     assert.equal(result?.verdict, "needs-review");
     assert.equal(result?.findings[0]?.category, "auth");
+  });
+});
+
+describe("lenient JSON repair (parseJsonResponse)", () => {
+  it("repairs trailing commas", () => {
+    const result = parseJsonResponse('{"a": 1, "b": 2,}');
+    assert.deepEqual(result, { a: 1, b: 2 });
+  });
+
+  it("repairs trailing comma in nested array", () => {
+    const result = parseJsonResponse('{"items": [1, 2, 3,]}');
+    assert.deepEqual(result, { items: [1, 2, 3] });
+  });
+
+  it("strips line comments", () => {
+    const result = parseJsonResponse(`{
+  // this is a comment
+  "a": 1
+}`);
+    assert.deepEqual(result, { a: 1 });
+  });
+
+  it("strips block comments", () => {
+    const result = parseJsonResponse(`{
+  /* block comment */
+  "a": 1
+}`);
+    assert.deepEqual(result, { a: 1 });
+  });
+
+  it("converts single-quoted strings to double quotes", () => {
+    const result = parseJsonResponse("{'a': 'b'}");
+    assert.deepEqual(result, { a: "b" });
+  });
+
+  it("quotes bare object keys", () => {
+    const result = parseJsonResponse('{ verdict: "pass", issues: [] }');
+    assert.deepEqual(result, { verdict: "pass", issues: [] });
+  });
+
+  it("repairs a fenced block with comments and trailing commas", () => {
+    const result = parseJsonResponse(`## Result
+\`\`\`json
+{
+  // verdict
+  "verdict": "pass",
+  "issues": [],
+}
+\`\`\``);
+    assert.deepEqual(result, { verdict: "pass", issues: [] });
+  });
+
+  it("does not mangle valid JSON", () => {
+    const result = parseJsonResponse('{"a": "// not a comment"}');
+    assert.deepEqual(result, { a: "// not a comment" });
+  });
+
+  it("unescapes single quotes inside single-quoted strings", () => {
+    const result = parseJsonResponse("{'a': 'it\\'s fine'}");
+    assert.deepEqual(result, { a: "it's fine" });
+  });
+});
+
+describe("richer markdown salvage", () => {
+  it("parses review issues from a markdown table", () => {
+    const text = `## Review
+
+| File | Severity | Issue | Suggestion |
+|------|----------|-------|------------|
+| src/a.ts | high | null deref | add null check |
+| src/b.ts:12 | low | naming | rename |`;
+    const result = salvageReviewFromMarkdown(text);
+    assert.equal(result?.issues.length, 2);
+    assert.equal(result?.issues[0]?.file, "src/a.ts");
+    assert.equal(result?.issues[0]?.severity, "high");
+    assert.match(result?.issues[0]?.issue ?? "", /null deref/);
+    assert.match(result?.issues[0]?.suggestion ?? "", /null check/);
+    assert.equal(result?.issues[1]?.file, "src/b.ts");
+    assert.equal(result?.issues[1]?.line, 12);
+  });
+
+  it("detects explicit verdict line before keywords", () => {
+    const result = salvageReviewFromMarkdown("**Verdict:** pass\n\n- minor nit");
+    assert.equal(result?.verdict, "pass");
+  });
+
+  it("does not treat pass-through as a pass verdict", () => {
+    const result = salvageReviewFromMarkdown("The value is pass-through and broken.");
+    assert.equal(result?.verdict, "blocked");
+  });
+
+  it("collects bullets under ### Issues as structured issues", () => {
+    const text = `Verdict: needs-work
+
+### Issues
+- src/a.ts: missing error handling
+- src/b.ts: typo in export
+
+### Suggestions
+- Consider a shared helper`;
+    const result = salvageReviewFromMarkdown(text);
+    assert.equal(result?.issues.length, 2);
+    assert.equal(result?.suggestions.length, 1);
+    assert.match(result?.suggestions[0] ?? "", /shared helper/);
+  });
+
+  it("judge salvage reuses structured issues", () => {
+    const text = `## Judgment: needs-work
+
+| File | Severity | Issue |
+|------|----------|-------|
+| x.ts | high | crash |`;
+    const result = salvageJudgeFromMarkdown(text);
+    assert.equal(result?.verdict, "needs-work");
+    assert.equal(result?.issues.length, 1);
+    assert.equal(result?.issues[0]?.severity, "high");
+  });
+
+  it("parses test findings from a table", () => {
+    const text = `Verdict: needs-work
+
+| File | Category | Finding |
+|------|----------|---------|
+| src/a.ts | failing-test | does not assert throw |`;
+    const result = salvageTestFromMarkdown(text);
+    assert.equal(result?.findings.length, 1);
+    assert.equal(result?.findings[0]?.file, "src/a.ts");
+    assert.equal(result?.findings[0]?.category, "failing-test");
+  });
+
+  it("parses security findings from a table with category column", () => {
+    const text = `Verdict: needs-review
+
+| File | Severity | Category | Issue |
+|------|----------|----------|-------|
+| auth.ts | critical | auth | token not verified |`;
+    const result = salvageSecurityFromMarkdown(text);
+    assert.equal(result?.findings.length, 1);
+    assert.equal(result?.findings[0]?.severity, "critical");
+    assert.equal(result?.findings[0]?.category, "auth");
+    assert.match(result?.findings[0]?.issue ?? "", /token not verified/);
+  });
+
+  it("validateReviewResult accepts table-salvaged issues", () => {
+    const salvaged = salvageReviewFromMarkdown(`| File | Severity | Issue | Suggestion |
+|------|----------|-------|------------|
+| a.ts | high | x | fix it|`);
+    assert.ok(validateReviewResult(salvaged!) !== null);
+  });
+
+  it("validateTestResult accepts table-salvaged findings", () => {
+    const salvaged = salvageTestFromMarkdown(`Verdict: needs-work
+
+| File | Category | Finding |
+|------|----------|---------|
+| a.ts | failing-test | x |`);
+    assert.ok(validateTestResult(salvaged!) !== null);
+  });
+
+  it("validateSecurityResult accepts table-salvaged findings", () => {
+    const salvaged = salvageSecurityFromMarkdown(`Verdict: needs-review
+
+| File | Severity | Category | Issue |
+|------|----------|----------|-------|
+| a.ts | critical | auth | x |`);
+    assert.ok(validateSecurityResult(salvaged!) !== null);
   });
 });
 

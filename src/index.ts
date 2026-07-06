@@ -585,6 +585,14 @@ async function executeYooReview(
     );
   }
 
+  if (review.verdict === "blocked" && (finalDiffTruncated || review.truncated || finalDroppedFiles.length > 0)) {
+    review.verdict = "needs-work";
+    review.consensus = false;
+    review.suggestions.push(
+      "Verdict was downgraded from 'blocked' to 'needs-work' because the review context was incomplete (truncated diff or omitted files); the review is inconclusive.",
+    );
+  }
+
   if (review.consensus) {
     markStepComplete(cwd, true);
     const planProgress = getProgress(cwd);

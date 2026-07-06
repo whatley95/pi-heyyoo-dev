@@ -512,13 +512,8 @@ export function parseJsonResponse<T>(text: string): T | null {
   // Strip BOM and normalize line endings.
   const cleaned = text.replace(/^\uFEFF/, "").trim();
 
-  // Try the whole text first.
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    parsed = undefined;
-  }
+  // Try the whole text first (strict, then lenient repair).
+  const parsed: unknown = tryParseJson(cleaned);
 
   // Unwrap common LLM wrapper objects like { "response": "..." }.
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -544,22 +539,16 @@ export function parseJsonResponse<T>(text: string): T | null {
   // Prefer the explicit structured-output section used by the prompts.
   const resultFence = cleaned.match(/(?:^|\n)##\s*Result\s*\n+```(?:json)?\s*([\s\S]*?)```/i);
   if (resultFence) {
-    try {
-      return JSON.parse(resultFence[1].trim()) as T;
-    } catch {
-      /* continue */
-    }
+    const candidate = tryParseJson(resultFence[1].trim());
+    if (candidate !== undefined) return candidate as T;
   }
 
   // Try each markdown code fence.
   const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/g;
   let fenceMatch: RegExpExecArray | null;
   while ((fenceMatch = fenceRegex.exec(cleaned)) !== null) {
-    try {
-      return JSON.parse(fenceMatch[1].trim()) as T;
-    } catch {
-      /* continue */
-    }
+    const candidate = tryParseJson(fenceMatch[1].trim());
+    if (candidate !== undefined) return candidate as T;
   }
 
   // Try inline backtick fences, but only for content that looks like JSON.
@@ -568,21 +557,15 @@ export function parseJsonResponse<T>(text: string): T | null {
   while ((inlineMatch = inlineRegex.exec(cleaned)) !== null) {
     const trimmed = inlineMatch[1].trim();
     if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) continue;
-    try {
-      return JSON.parse(trimmed) as T;
-    } catch {
-      /* continue */
-    }
+    const candidate = tryParseJson(trimmed);
+    if (candidate !== undefined) return candidate as T;
   }
 
   // Find the largest balanced JSON object in the text, respecting strings.
   const json = extractLargestJsonObject(cleaned);
   if (json) {
-    try {
-      return JSON.parse(json) as T;
-    } catch {
-      /* continue */
-    }
+    const candidate = tryParseJson(json);
+    if (candidate !== undefined) return candidate as T;
   }
 
   return null;
@@ -624,6 +607,129 @@ function extractLargestJsonObject(text: string): string | null {
     }
   }
   return best;
+}
+
+/**
+ * Lenient repair of near-valid JSON produced by LLMs. String-aware single pass:
+ * strips line and block comments, normalizes single-quoted strings to double quotes,
+ * quotes bare object keys, and drops trailing commas. Only invoked when JSON.parse
+ * fails, so mangling non-JSON prose is harmless (it simply still won't parse).
+ */
+function repairJson(input: string): string {
+  let out = "";
+  let i = 0;
+  const n = input.length;
+  const isIdentStart = (c: string): boolean => /[A-Za-z_$]/.test(c);
+  const isIdentPart = (c: string): boolean => /[\w$]/.test(c);
+  const isWs = (c: string): boolean => c === " " || c === "\t" || c === "\n" || c === "\r";
+  while (i < n) {
+    const ch = input[i];
+    if (isWs(ch)) {
+      out += ch;
+      i++;
+      continue;
+    }
+    // Line comment // ... \n
+    if (ch === "/" && input[i + 1] === "/") {
+      i += 2;
+      while (i < n && input[i] !== "\n") i++;
+      continue;
+    }
+    // Block comment /* ... */
+    if (ch === "/" && input[i + 1] === "*") {
+      i += 2;
+      while (i < n && !(input[i] === "*" && input[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    // String literal (double or single quoted).
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      out += '"';
+      i++;
+      while (i < n) {
+        const c = input[i];
+        if (c === "\\") {
+          // Inside single-quoted strings, unescape \' to ' (\' is invalid JSON).
+          if (quote === "'" && input[i + 1] === "'") {
+            out += "'";
+            i += 2;
+            continue;
+          }
+          out += c;
+          if (i + 1 < n) {
+            out += input[i + 1];
+            i += 2;
+          } else {
+            i++;
+          }
+          continue;
+        }
+        if (c === quote) {
+          out += '"';
+          i++;
+          break;
+        }
+        // Escape embedded double quotes when the source used single quotes.
+        if (c === '"' && quote === "'") {
+          out += '\\"';
+          i++;
+          continue;
+        }
+        out += c;
+        i++;
+      }
+      continue;
+    }
+    // Bare identifier: could be a key (ident followed by optional ws then ':') or a literal.
+    if (isIdentStart(ch)) {
+      let j = i;
+      let ident = "";
+      while (j < n && isIdentPart(input[j])) {
+        ident += input[j];
+        j++;
+      }
+      let k = j;
+      while (k < n && isWs(input[k])) k++;
+      if (input[k] === ":") {
+        out += '"' + ident + '"';
+        i = j;
+        continue;
+      }
+      out += ident;
+      i = j;
+      continue;
+    }
+    // Trailing comma before } or ]: drop it.
+    if (ch === ",") {
+      let k = i + 1;
+      while (k < n && isWs(input[k])) k++;
+      if (input[k] === "}" || input[k] === "]") {
+        i++;
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/** Try strict JSON.parse first, then a lenient repair pass. Returns undefined if both fail. */
+function tryParseJson(text: string): unknown | undefined {
+  try {
+    return JSON.parse(text);
+  } catch {
+    /* fall through to repair */
+  }
+  try {
+    return JSON.parse(repairJson(text));
+  } catch {
+    return undefined;
+  }
 }
 
 function castOrNull<T>(schema: Parameters<typeof Value.Cast>[0], data: unknown): T | null {
@@ -814,43 +920,201 @@ function firstMarkdownParagraph(text: string): string {
   );
 }
 
+/** Extract the body of a markdown section headed by `## Heading` / `### Heading` (case-insensitive). */
+function extractSection(text: string, headingPattern: string): string {
+  const re = new RegExp(`^#{2,4}\\s+(?:${headingPattern})\\s*$`, "im");
+  const match = re.exec(text);
+  if (!match) return "";
+  const start = match.index! + match[0].length;
+  const nextHeading = text.slice(start).match(/\n#{2,4}\s+/);
+  const end = nextHeading ? start + nextHeading.index! : text.length;
+  return text.slice(start, end).trim();
+}
+
+interface ParsedMarkdownTable {
+  headers: string[];
+  rows: string[][];
+}
+
+/** Parse GitHub-flavoured markdown tables (`| col | col |` rows). Returns all tables concatenated. */
+function parseMarkdownTables(text: string): ParsedMarkdownTable[] {
+  const tables: ParsedMarkdownTable[] = [];
+  const lines = text.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    if (/^\s*\|/.test(lines[i]) && lines[i].includes("|", lines[i].indexOf("|") + 1)) {
+      const tableLines: string[] = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      if (tableLines.length >= 2) {
+        const splitRow = (row: string): string[] =>
+          row
+            .replace(/^\s*\|/, "")
+            .replace(/\|\s*$/, "")
+            .split("|")
+            .map((c) => c.trim());
+        const headers = splitRow(tableLines[0]);
+        // Skip the separator row (| --- | --- |).
+        const dataStart = /^\s*\|?\s*[-:]+/.test(tableLines[1]) ? 2 : 1;
+        const rows = tableLines.slice(dataStart).map(splitRow);
+        if (headers.length > 1 && rows.length > 0) tables.push({ headers, rows });
+      }
+    } else {
+      i++;
+    }
+  }
+  return tables;
+}
+
+function normalizeHeader(h: string): string {
+  return h.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Find the column index whose header best matches one of the candidates. */
+function findColumn(headers: string[], candidates: string[]): number {
+  const norm = headers.map(normalizeHeader);
+  for (const candidate of candidates) {
+    const c = normalizeHeader(candidate);
+    const idx = norm.findIndex((h) => h === c || (h.length > 2 && h.includes(c)));
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+function severityFromString(value: string | undefined): "high" | "medium" | "low" {
+  if (!value) return "low";
+  const s = value.toLowerCase();
+  if (/\bcritical\b|\bhigh\b|\berror\b|\bblock/.test(s)) return "high";
+  if (/\bmedium\b|\bmoderate\b|\bwarn/.test(s)) return "medium";
+  return "low";
+}
+
+function securitySeverityFromString(value: string | undefined): "critical" | "high" | "medium" | "low" {
+  if (!value) return "low";
+  const s = value.toLowerCase();
+  if (/\bcritical\b/.test(s)) return "critical";
+  if (/\bhigh\b|\berror\b/.test(s)) return "high";
+  if (/\bmedium\b|\bmoderate\b|\bwarn/.test(s)) return "medium";
+  return "low";
+}
+
+/** Parse a `file:line` or `file` location string into { file, line }. */
+function parseFileLocation(value: string | undefined): { file?: string; line?: number } {
+  if (!value) return {};
+  const trimmed = value.trim().replace(/[`*]/g, "");
+  const match = trimmed.match(/^(.+?)(?::(\d+))?(?::\d+)*$/);
+  if (!match) return { file: trimmed };
+  return { file: match[1], line: match[2] ? Number(match[2]) : undefined };
+}
+
+/**
+ * Detect an explicit verdict line (`Verdict: pass`, `## Verdict: ✅ pass`,
+ * `**Verdict:** needs-work`) before falling back to keyword heuristics.
+ */
+function detectVerdictExplicit(text: string): "pass" | "needs-work" | "blocked" | "needs-review" | null {
+  const lower = text.toLowerCase();
+  const verdictLine = lower.match(
+    /\bverdict\b\s*[:-]?\s*[*_`]?\s*(pass|needs-work|needs review|needsreview|blocked|fail|fails|failing)/,
+  );
+  if (verdictLine) {
+    const v = verdictLine[1];
+    if (v === "pass") return "pass";
+    if (v === "blocked" || v === "fail" || v === "fails" || v === "failing") return "blocked";
+    if (v === "needs review" || v === "needsreview") return "needs-review";
+    return "needs-work";
+  }
+  // Heading form: `## Verdict: ✅ pass` / `## Judgment: pass`.
+  const heading = lower.match(
+    /^#{1,4}\s+(?:verdict|judgment|review|result)\b[^\n]*?(pass|needs-work|needs review|needsreview|blocked)/m,
+  );
+  if (heading) {
+    const v = heading[1];
+    if (v === "pass") return "pass";
+    if (v === "blocked") return "blocked";
+    if (v === "needs review" || v === "needsreview") return "needs-review";
+    return "needs-work";
+  }
+  return null;
+}
+
+/** Keyword heuristic for review/judge verdicts, guarded against false positives like "pass-through".
+ *  Does NOT infer "blocked" from the literal word "blocked" in prose — that verdict must come from
+ *  detectVerdictExplicit. Strong signals like "broken" / "cannot work" still map to "blocked".
+ */
+function heuristicReviewVerdict(lower: string): "pass" | "needs-work" | "blocked" {
+  if (/\bcannot work\b|\bbroken\b/.test(lower)) return "blocked";
+  if (/\bneeds-work\b|\bneeds work\b/.test(lower)) return "needs-work";
+  if (/(?:^|[^-\w])pass\b|\bapproved\b|\blooks good\b|\blgtm\b/.test(lower)) return "pass";
+  return "needs-work";
+}
+
 export function salvageReviewFromMarkdown(raw: string): ReviewResult | null {
   const text = raw.trim();
   if (!text) return null;
 
   const lower = text.toLowerCase();
+  const explicit = detectVerdictExplicit(text);
+  const verdict: ReviewResult["verdict"] =
+    explicit === "pass" || explicit === "needs-work" || explicit === "blocked"
+      ? explicit
+      : heuristicReviewVerdict(lower);
 
-  let verdict: ReviewResult["verdict"] = "needs-work";
-  if (/\bpass\b|\bapproved\b|\blooks good\b|\blgtm\b/.test(lower) && !/\bneeds-work\b|\bblocked\b/.test(lower)) {
-    verdict = "pass";
-  } else if (/\bblocked\b|\bcannot work\b|\bbroken\b/.test(lower)) {
-    verdict = "blocked";
-  }
+  const issues: ReviewIssue[] = [];
 
-  const suggestions: string[] = [];
-  const bulletRegex = /^[-*•]\s+(.+)$/gim;
-  let match: RegExpExecArray | null;
-  while ((match = bulletRegex.exec(text)) !== null) {
-    const line = match[1].trim();
-    if (line && !line.toLowerCase().startsWith("verdict")) {
-      suggestions.push(line);
+  // Structured issues from markdown tables (| File | Severity | Issue | ... |).
+  for (const table of parseMarkdownTables(text)) {
+    const fileCol = findColumn(table.headers, ["file", "path", "location", "loc"]);
+    const sevCol = findColumn(table.headers, ["severity", "risk", "priority"]);
+    const issueCol = findColumn(table.headers, ["issue", "problem", "finding", "description", "concern", "what"]);
+    const sugCol = findColumn(table.headers, ["suggestion", "fix", "recommendation", "action", "resolution"]);
+    if (issueCol < 0) continue; // not an issues table
+    for (const row of table.rows) {
+      const issueText = row[issueCol]?.trim();
+      if (!issueText) continue;
+      const loc = fileCol >= 0 ? parseFileLocation(row[fileCol]) : {};
+      issues.push({
+        severity: severityFromString(sevCol >= 0 ? row[sevCol] : undefined),
+        file: loc.file,
+        line: loc.line,
+        issue: issueText,
+        suggestion: sugCol >= 0 ? (row[sugCol]?.trim() ?? "") : "",
+      });
     }
   }
 
-  // If there are no suggestions but the text has a clear "suggestion" section, capture sentences.
-  if (suggestions.length === 0) {
-    const sentenceRegex = /[A-Z][^.!?]*(?:suggest|recommend|consider|should|could|improvement)[^.!?]*[.!?]/gi;
-    const sentenceMatches = text.match(sentenceRegex);
-    if (sentenceMatches) {
-      suggestions.push(...sentenceMatches.map((s) => s.trim()));
+  // Bullets under an `### Issues` / `### Findings` section → structured issues.
+  const issuesSection = extractSection(text, "issues|findings");
+  if (issuesSection) {
+    for (const bullet of markdownBullets(issuesSection)) {
+      const locMatch = bullet.match(/^[`*]?(.+?)[`*]?(?:\s*[:\-—]\s*(.+))?$/);
+      issues.push({
+        severity: /high|critical/i.test(bullet) ? "high" : /medium|moderate/i.test(bullet) ? "medium" : "low",
+        file: locMatch?.[1]?.trim(),
+        issue: locMatch?.[2]?.trim() ?? bullet,
+        suggestion: "",
+      });
     }
+  }
+
+  // Suggestions: bullets under a `### Suggestions` section, else any loose bullets.
+  let suggestions: string[];
+  const suggestionsSection = extractSection(text, "suggestions");
+  if (suggestionsSection) {
+    suggestions = markdownBullets(suggestionsSection);
+  } else if (issues.length === 0) {
+    // No structured issues and no suggestions section: keep legacy behavior (all bullets).
+    suggestions = markdownBullets(text).filter((line) => !line.toLowerCase().startsWith("verdict"));
+  } else {
+    suggestions = [];
   }
 
   return {
     verdict,
-    issues: [],
+    issues: issues.slice(0, 20),
     suggestions: suggestions.slice(0, 10),
-    consensus: verdict === "pass" && suggestions.length === 0,
+    consensus: verdict === "pass" && issues.length === 0 && suggestions.length === 0,
   };
 }
 
@@ -859,31 +1123,25 @@ export function salvageJudgeFromMarkdown(raw: string): import("./types.js").Judg
   if (!text) return null;
 
   const lower = text.toLowerCase();
-  let verdict: import("./types.js").JudgeResult["verdict"] = "needs-work";
-  if (/\bpass\b|\bapproved\b|\blooks good\b|\blgtm\b/.test(lower) && !/\bneeds-work\b|\bblocked\b/.test(lower)) {
-    verdict = "pass";
-  } else if (/\bblocked\b|\bcannot work\b|\bbroken\b/.test(lower)) {
-    verdict = "blocked";
-  }
+  const explicit = detectVerdictExplicit(text);
+  const verdict: import("./types.js").JudgeResult["verdict"] =
+    explicit === "pass" || explicit === "needs-work" || explicit === "blocked"
+      ? explicit
+      : heuristicReviewVerdict(lower);
 
-  const suggestions: string[] = [];
-  const bulletRegex = /^[-*•]\s+(.+)$/gim;
-  let match: RegExpExecArray | null;
-  while ((match = bulletRegex.exec(text)) !== null) {
-    const line = match[1].trim();
-    if (line && !line.toLowerCase().startsWith("verdict")) {
-      suggestions.push(line);
-    }
-  }
+  // Reuse the review salvage for issues/suggestions structure.
+  const reviewParts = salvageReviewFromMarkdown(raw);
+  const issues = reviewParts?.issues ?? [];
+  const suggestions = reviewParts?.suggestions ?? [];
 
   const summaryMatch = text.match(/(?:summary|assessment|overall)[\s:]*(.+?)(?=\n\n|$)/is);
-  const summary = summaryMatch?.[1].trim() ?? text.slice(0, 300).trim();
+  const summary = summaryMatch?.[1].trim() || firstMarkdownParagraph(text).slice(0, 1000) || text.slice(0, 300).trim();
 
   return {
     verdict,
-    issues: [],
+    issues,
     suggestions: suggestions.slice(0, 10),
-    consensus: verdict === "pass" && suggestions.length === 0,
+    consensus: verdict === "pass" && issues.length === 0 && suggestions.length === 0,
     summary,
   };
 }
@@ -975,29 +1233,64 @@ export function salvageTestFromMarkdown(raw: string): import("./types.js").TestR
   if (!text) return null;
 
   const lower = text.toLowerCase();
+  const explicit = detectVerdictExplicit(text);
   let verdict: import("./types.js").TestResult["verdict"] = "needs-work";
-  if (/\bblocked\b|\bfailing\b|\bfails\b|\bcannot merge\b/.test(lower)) {
+  if (explicit === "blocked" || explicit === "needs-work" || explicit === "pass") {
+    verdict = explicit;
+  } else if (/\bblocked\b|\bfailing\b|\bfails\b|\bcannot merge\b/.test(lower)) {
     verdict = "blocked";
-  } else if (/\bpass\b|\badequate\b|\bcovered\b/.test(lower) && !/\bneeds-work\b|\bmissing\b|\bfailing\b/.test(lower)) {
+  } else if (
+    /(?:^|[^-\w])pass\b|\badequate\b|\bcovered\b/.test(lower) &&
+    !/\bneeds-work\b|\bmissing\b|\bfailing\b/.test(lower)
+  ) {
     verdict = "pass";
   }
 
-  const bullets = markdownBullets(text);
+  const findings: import("./types.js").TestFinding[] = [];
+
+  // Findings from markdown tables.
+  for (const table of parseMarkdownTables(text)) {
+    const fileCol = findColumn(table.headers, ["file", "path", "location"]);
+    const sevCol = findColumn(table.headers, ["severity", "priority"]);
+    const issueCol = findColumn(table.headers, ["finding", "issue", "problem", "description"]);
+    const catCol = findColumn(table.headers, ["category", "type"]);
+    const sugCol = findColumn(table.headers, ["suggestion", "fix", "action"]);
+    if (issueCol < 0) continue;
+    for (const row of table.rows) {
+      const issueText = row[issueCol]?.trim();
+      if (!issueText) continue;
+      const loc = fileCol >= 0 ? parseFileLocation(row[fileCol]) : {};
+      findings.push({
+        severity: severityFromString(sevCol >= 0 ? row[sevCol] : undefined),
+        file: loc.file,
+        line: loc.line,
+        issue: issueText,
+        suggestion: sugCol >= 0 ? (row[sugCol]?.trim() ?? "") : "Address this test finding.",
+        category: catCol >= 0 ? (row[catCol]?.trim() ?? undefined) : undefined,
+      });
+    }
+  }
+
   const missingSection = text.match(/(?:missing\s*tests?)[\s:]*\n+([\s\S]*?)(?=\n#+\s|\n\n##|$)/i);
   const missingTests = (missingSection ? markdownBullets(missingSection[1]) : []).map((reason) => ({ reason }));
-  const findings = bullets
-    .filter((b) => !missingTests.some((m) => m.reason === b))
-    .slice(0, 10)
-    .map((issue) => ({
-      severity: verdict === "blocked" ? ("high" as const) : ("medium" as const),
-      issue,
-      suggestion: "Address this test finding.",
-      category: lower.includes("failing") || lower.includes("fails") ? "failing-test" : "test-quality",
-    }));
+
+  // Bullets under a `### Findings` section (not already in a table).
+  if (findings.length === 0) {
+    const findingsSection = extractSection(text, "findings|issues");
+    const bullets = markdownBullets(findingsSection || text).filter((b) => !missingTests.some((m) => m.reason === b));
+    for (const issue of bullets.slice(0, 10)) {
+      findings.push({
+        severity: verdict === "blocked" ? "high" : "medium",
+        issue,
+        suggestion: "Address this test finding.",
+        category: lower.includes("failing") || lower.includes("fails") ? "failing-test" : "test-quality",
+      });
+    }
+  }
 
   return {
     verdict,
-    findings,
+    findings: findings.slice(0, 20),
     missingTests: missingTests.slice(0, 10),
     summary: firstMarkdownParagraph(text).slice(0, 1000) || text.slice(0, 300),
   };
@@ -1008,31 +1301,70 @@ export function salvageSecurityFromMarkdown(raw: string): import("./types.js").S
   if (!text) return null;
 
   const lower = text.toLowerCase();
+  const explicit = detectVerdictExplicit(text);
   const hasSeriousFinding = /\bcritical\b|\bhigh\b|\bvulnerab|\binjection\b|\bsecret\b|\bauth\b/.test(lower);
-  const verdict: import("./types.js").SecurityResult["verdict"] =
-    /\bpass\b|\bno findings\b|\bno security issues\b/.test(lower) && !hasSeriousFinding ? "pass" : "needs-review";
-  const findings = markdownBullets(text)
-    .slice(0, 10)
-    .map((issue) => ({
-      severity: /critical/i.test(issue)
-        ? ("critical" as const)
-        : hasSeriousFinding
-          ? ("medium" as const)
-          : ("low" as const),
-      issue,
-      suggestion: "Review and remediate this security finding.",
-      category: lower.includes("secret")
-        ? "secrets"
-        : lower.includes("injection")
-          ? "injection"
-          : lower.includes("auth")
-            ? "auth"
-            : "other",
-    }));
+  let verdict: import("./types.js").SecurityResult["verdict"];
+  if (explicit === "pass") {
+    verdict = hasSeriousFinding ? "needs-review" : "pass";
+  } else if (explicit === "needs-review" || explicit === "needs-work") {
+    verdict = "needs-review";
+  } else {
+    verdict =
+      /(?:^|[^-\w])pass\b|\bno findings\b|\bno security issues\b/.test(lower) && !hasSeriousFinding
+        ? "pass"
+        : "needs-review";
+  }
+
+  const findings: import("./types.js").SecurityFinding[] = [];
+
+  // Findings from markdown tables.
+  for (const table of parseMarkdownTables(text)) {
+    const fileCol = findColumn(table.headers, ["file", "path", "location"]);
+    const sevCol = findColumn(table.headers, ["severity", "risk", "priority"]);
+    const issueCol = findColumn(table.headers, ["finding", "issue", "problem", "description", "concern"]);
+    const catCol = findColumn(table.headers, ["category", "type"]);
+    const sugCol = findColumn(table.headers, ["suggestion", "fix", "remediation", "action"]);
+    if (issueCol < 0) continue;
+    for (const row of table.rows) {
+      const issueText = row[issueCol]?.trim();
+      if (!issueText) continue;
+      const loc = fileCol >= 0 ? parseFileLocation(row[fileCol]) : {};
+      const category = catCol >= 0 ? row[catCol]?.trim() || "other" : "other";
+      findings.push({
+        severity: securitySeverityFromString(sevCol >= 0 ? row[sevCol] : undefined),
+        file: loc.file,
+        line: loc.line,
+        issue: issueText,
+        suggestion:
+          sugCol >= 0
+            ? (row[sugCol]?.trim() ?? "Review and remediate this security finding.")
+            : "Review and remediate this security finding.",
+        category,
+      });
+    }
+  }
+
+  // Fall back to bullets when no tables were found.
+  if (findings.length === 0) {
+    for (const issue of markdownBullets(text).slice(0, 10)) {
+      findings.push({
+        severity: /critical/i.test(issue) ? "critical" : hasSeriousFinding ? "medium" : "low",
+        issue,
+        suggestion: "Review and remediate this security finding.",
+        category: lower.includes("secret")
+          ? "secrets"
+          : lower.includes("injection")
+            ? "injection"
+            : lower.includes("auth")
+              ? "auth"
+              : "other",
+      });
+    }
+  }
 
   return {
     verdict,
-    findings,
+    findings: findings.slice(0, 20),
     summary: firstMarkdownParagraph(text).slice(0, 1000) || text.slice(0, 300),
   };
 }
