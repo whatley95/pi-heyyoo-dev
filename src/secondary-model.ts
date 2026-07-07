@@ -422,6 +422,8 @@ interface ContentPart {
 interface AssistantMessageLike {
   role?: unknown;
   content?: unknown;
+  stopReason?: unknown;
+  errorMessage?: unknown;
   usage?: {
     input?: number;
     output?: number;
@@ -467,6 +469,8 @@ interface PiProcessResult {
   // Track the last message_update event's message and assistantMessageEvent for fallback.
   lastAssistantMessageEvent?: Record<string, unknown>;
   lastMessageUpdateText?: string;
+  // Track error messages from assistant messages that failed (stopReason === "error" / "aborted").
+  lastErrorMessage?: string;
 }
 
 function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string): void {
@@ -589,6 +593,15 @@ function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string):
   if (event.type === "message_end" || event.type === "turn_end") {
     if (message.role === "assistant") {
       result.messages.push(message);
+      const stopReason = message.stopReason;
+      const errorMessage = message.errorMessage;
+      if (
+        (stopReason === "error" || stopReason === "aborted") &&
+        typeof errorMessage === "string" &&
+        errorMessage.length > 0
+      ) {
+        result.lastErrorMessage = errorMessage;
+      }
       if (message.usage) {
         result.inputTokens += message.usage.input || 0;
         result.outputTokens += message.usage.output || 0;
@@ -827,7 +840,8 @@ async function callPiBackend(
         // No assistant text — collect diagnostics and retry.
         const stderrPreview = result.stderr.trim().slice(0, 500);
         const msgRoles = result.messages.map((m) => m.role).join(",");
-        const diag = `messages=${result.messages.length} [${msgRoles}], stderr=${stderrPreview || "(empty)"}`;
+        const errorMsg = result.lastErrorMessage ? `error="${result.lastErrorMessage.slice(0, 500)}"` : "";
+        const diag = `messages=${result.messages.length} [${msgRoles}], stderr=${stderrPreview || "(empty)"}${errorMsg ? `, ${errorMsg}` : ""}`;
         attemptErrors.push(`attempt ${attempt + 1}: ${diag}`);
         if (cwd) {
           logEvent(cwd, "warn", "Pi backend produced no assistant text, retrying", {
@@ -836,8 +850,10 @@ async function callPiBackend(
             messageCount: result.messages.length,
             provider,
             model,
+            errorMessage: result.lastErrorMessage,
             contentTypes: result.messages.map((m) => ({
               role: m.role,
+              stopReason: m.stopReason,
               types: Array.isArray(m.content)
                 ? m.content.map((c) => (c && typeof c === "object" ? (c as ContentPart).type : typeof c))
                 : typeof m.content,
@@ -874,6 +890,19 @@ async function callPiBackend(
         model,
         promptTokensEstimate: estimateTokens(systemPrompt + userPrompt),
       });
+    }
+    // If the model returned an explicit error message (e.g. rate limit, content policy),
+    // surface it instead of the generic "no assistant text" message.
+    const lastError = attemptErrors
+      .map((e) => {
+        const match = /error="([^"]+)"/.exec(e);
+        return match?.[1];
+      })
+      .find(Boolean);
+    if (lastError) {
+      throw new Error(
+        `Secondary pi process failed after ${maxRetries + 1} attempts: ${lastError}`,
+      );
     }
     throw new Error(
       `Secondary pi process produced no assistant text after ${maxRetries + 1} attempts: ${attemptErrors.join(" | ")}`,
