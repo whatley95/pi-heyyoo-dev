@@ -1,11 +1,24 @@
-import { describe, it } from "node:test";
+import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { resolveTaskModel } from "./config.js";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveTaskModel, loadHeyyooConfig } from "./config.js";
 import type { HeyyooConfig } from "./types.js";
 
 const baseConfig: HeyyooConfig = {
   secondary: { provider: "openai", id: "gpt-4o-mini", thinking: "off", backend: "pi" },
 };
+
+function makeTempDir(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function writeProjectSettings(cwd: string, yooSettings: Record<string, unknown>): void {
+  const piDir = join(cwd, ".pi");
+  mkdirSync(piDir, { recursive: true });
+  writeFileSync(join(piDir, "settings.json"), JSON.stringify({ "pi-heyyoo": yooSettings }, null, 2), "utf-8");
+}
 
 describe("resolveTaskModel", () => {
   it("returns base secondary when no task override exists", () => {
@@ -121,5 +134,84 @@ describe("resolveTaskModel", () => {
     assert.equal(result.maxRetries, 5);
     assert.equal(result.maxRetryDelayMs, 1000);
     assert.equal(result.timeoutMs, 60000);
+  });
+});
+
+describe("loadHeyyooConfig docs", () => {
+  const tmpDirs: string[] = [];
+
+  after(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  });
+
+  it("provides default docs config when none is configured", () => {
+    const cwd = makeTempDir("config-docs-default-");
+    tmpDirs.push(cwd);
+    writeProjectSettings(cwd, { secondary: { provider: "openai", id: "gpt-4o" } });
+
+    const config = loadHeyyooConfig(cwd);
+    assert.ok(config.docs);
+    assert.deepEqual(config.docs?.sources, {});
+    assert.equal(config.docs?.maxCharsPerSource, 8000);
+    assert.equal(config.docs?.webSearch.enabled, false);
+    assert.equal(config.docs?.webSearch.maxResults, 3);
+    assert.equal(config.docs?.webSearch.maxCharsPerResult, 3000);
+  });
+
+  it("merges project docs sources and web search settings", () => {
+    const cwd = makeTempDir("config-docs-merge-");
+    tmpDirs.push(cwd);
+    writeProjectSettings(cwd, {
+      secondary: { provider: "openai", id: "gpt-4o" },
+      docs: {
+        sources: { react: "https://react.dev" },
+        maxCharsPerSource: 5000,
+        webSearch: { enabled: true, maxResults: 5, maxCharsPerResult: 1000 },
+      },
+    });
+
+    const config = loadHeyyooConfig(cwd);
+    assert.deepEqual(config.docs?.sources, { react: "https://react.dev" });
+    assert.equal(config.docs?.maxCharsPerSource, 5000);
+    assert.equal(config.docs?.webSearch.enabled, true);
+    assert.equal(config.docs?.webSearch.maxResults, 5);
+    assert.equal(config.docs?.webSearch.maxCharsPerResult, 1000);
+  });
+
+  it("ignores non-positive integer limits and falls back to defaults", () => {
+    const cwd = makeTempDir("config-docs-invalid-");
+    tmpDirs.push(cwd);
+    writeProjectSettings(cwd, {
+      secondary: { provider: "openai", id: "gpt-4o" },
+      docs: {
+        maxCharsPerSource: -100,
+        webSearch: { enabled: true, maxResults: 0, maxCharsPerResult: 3.5 },
+      },
+    });
+
+    const config = loadHeyyooConfig(cwd);
+    assert.equal(config.docs?.maxCharsPerSource, 8000);
+    assert.equal(config.docs?.webSearch.maxResults, 3);
+    assert.equal(config.docs?.webSearch.maxCharsPerResult, 3000);
+  });
+
+  it("ignores invalid source entries", () => {
+    const cwd = makeTempDir("config-docs-sources-");
+    tmpDirs.push(cwd);
+    writeProjectSettings(cwd, {
+      secondary: { provider: "openai", id: "gpt-4o" },
+      docs: {
+        sources: { react: "https://react.dev", empty: "", invalid: 123 as unknown as string },
+      },
+    });
+
+    const config = loadHeyyooConfig(cwd);
+    assert.deepEqual(config.docs?.sources, { react: "https://react.dev" });
   });
 });

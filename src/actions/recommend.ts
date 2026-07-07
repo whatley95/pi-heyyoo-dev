@@ -10,6 +10,7 @@ import {
 } from "../prompts.js";
 import { logEvent } from "../logger.js";
 import { getState } from "../session-state.js";
+import { loadDocContext, type DocContextRequest } from "../doc-fetcher.js";
 import { STAGES, secondaryModelLabel, recordCostWithBudget, parseStructuredResult } from "./shared.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult, UsageCost } from "../types.js";
@@ -20,6 +21,7 @@ export async function executeYooRecommend(
   signal: AbortSignal | undefined,
   progress: ProgressReporter,
   sessionManager?: ExtensionContext["sessionManager"],
+  docRequest: DocContextRequest = {},
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   const modelConfig = resolveTaskModel(config, "recommend");
@@ -34,7 +36,13 @@ export async function executeYooRecommend(
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
-  const { system, user } = buildRecommendPrompt(situation, state.plan?.todo, conventionsText, nativeJson);
+  let docContext = "";
+  if (docRequest.docs?.length) {
+    progress(2, STAGES.recommend, "Fetching external docs…");
+    docContext = await loadDocContext(cwd, config.docs, docRequest);
+  }
+
+  const { system, user } = buildRecommendPrompt(situation, state.plan?.todo, conventionsText, nativeJson, docContext);
   progress(2, STAGES.recommend, `Calling ${secondaryModelLabel(modelConfig)}…`);
   let raw: string;
   let usage: UsageCost;

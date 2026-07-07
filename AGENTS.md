@@ -73,6 +73,8 @@ pi-heyyoo/
     ├── model-registry.ts # Known secondary model context windows and output limits
     ├── pi-paths.ts       # Resolve Pi agent and project config paths
     ├── logger.ts         # Per-project event/error log
+    ├── yoo-search.ts     # /yoo-search terminal command handler
+    ├── yoo-tool-params.ts # Validation for the main yoo tool parameters
     └── types/stubs/      # Ambient declarations for peer dependencies
         ├── pi-peer-deps.d.ts
         └── pi-tui.d.ts
@@ -88,6 +90,8 @@ pi-heyyoo/
 - **`conventions.ts`** — Static heuristics over the tracked file list plus an LLM pass; stores conventions in `.pi/heyyoo/conventions.json`.
 - **`cost-tracker.ts` / `plan-store.ts` / `review-memory.ts`** — Persistent state under `.pi/heyyoo/`.
 - **`loop-detector.ts`** — Watches recent tool calls and emits a steer message when `yoo.review`/`yoo.judge` repeats without real edits.
+- **`yoo-search.ts`** — Handles the `/yoo-search` terminal command: validates the query, checks `pi-heyyoo.docs.webSearch.enabled`, runs DuckDuckGo search via `doc-fetcher.ts`, and formats raw results.
+- **`yoo-tool-params.ts`** — Validates the main `yoo` tool parameter object, resolves the requested action, and strips/ignores disallowed fields such as the removed `search` parameter.
 
 ---
 

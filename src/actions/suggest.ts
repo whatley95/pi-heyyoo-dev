@@ -9,6 +9,7 @@ import {
   salvageSuggestFromMarkdown,
 } from "../prompts.js";
 import { logEvent } from "../logger.js";
+import { loadDocContext, type DocContextRequest } from "../doc-fetcher.js";
 import { STAGES, secondaryModelLabel, recordCostWithBudget, parseStructuredResult } from "./shared.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult, UsageCost } from "../types.js";
@@ -19,6 +20,7 @@ export async function executeYooSuggest(
   signal: AbortSignal | undefined,
   progress: ProgressReporter,
   sessionManager?: ExtensionContext["sessionManager"],
+  docRequest: DocContextRequest = {},
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
   const modelConfig = resolveTaskModel(config, "suggest");
@@ -31,7 +33,13 @@ export async function executeYooSuggest(
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
 
-  const { system, user } = buildSuggestPrompt(question, conventionsText, nativeJson);
+  let docContext = "";
+  if (docRequest.docs?.length) {
+    progress(2, STAGES.suggest, "Fetching external docs…");
+    docContext = await loadDocContext(cwd, config.docs, docRequest);
+  }
+
+  const { system, user } = buildSuggestPrompt(question, conventionsText, nativeJson, docContext);
   progress(2, STAGES.suggest, `Calling ${secondaryModelLabel(modelConfig)}…`);
   let raw: string;
   let usage: UsageCost;

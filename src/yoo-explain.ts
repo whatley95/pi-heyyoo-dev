@@ -7,6 +7,7 @@ import { recordCost } from "./cost-tracker.js";
 import { logEvent } from "./logger.js";
 import { resolveProjectPath } from "./path-security.js";
 import { buildExplainPrompt } from "./prompts.js";
+import { loadDocContext, type DocContextRequest } from "./doc-fetcher.js";
 import type { ProgressReporter } from "./progress.js";
 import type { ExplainResult, UsageCost } from "./types.js";
 
@@ -14,6 +15,7 @@ export interface YooExplainParams {
   target: string;
   context?: string;
   files?: string[];
+  docs?: string[];
 }
 
 export function validateYooExplainParams(
@@ -32,6 +34,9 @@ export function validateYooExplainParams(
   }
   if (Array.isArray(r.files)) {
     params.files = r.files.filter((f): f is string => typeof f === "string");
+  }
+  if (Array.isArray(r.docs)) {
+    params.docs = r.docs.filter((d): d is string => typeof d === "string" && d.length > 0);
   }
   return { ok: true, params };
 }
@@ -71,22 +76,33 @@ export async function executeYooExplain(
     return { error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
 
-  progress(1, 3, "Loading project context…");
+  const docRequest: DocContextRequest = { docs: params.docs };
+  const hasDocs = Boolean(params.docs?.length);
+  const totalStages = hasDocs ? 4 : 3;
+
+  progress(1, totalStages, "Loading project context…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
   const index = loadProjectIndex(cwd);
   const indexSummary = index ? summarizeIndexForExplain(index, params.target) : "";
 
-  progress(2, 3, "Reading referenced files…");
+  progress(2, totalStages, "Reading referenced files…");
   const fileContents = params.files ? readFiles(cwd, params.files) : [];
 
-  progress(3, 3, `Calling ${modelConfig.provider}:${modelConfig.id}…`);
+  let docContext = "";
+  if (hasDocs) {
+    progress(3, totalStages, "Fetching external docs…");
+    docContext = await loadDocContext(cwd, config.docs, docRequest);
+  }
+
+  progress(hasDocs ? 4 : 3, totalStages, `Calling ${modelConfig.provider}:${modelConfig.id}…`);
   const { system, user } = buildExplainPrompt(
     params.target,
     params.context,
     conventionsText,
     indexSummary,
     fileContents,
+    docContext,
   );
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,

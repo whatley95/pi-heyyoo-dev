@@ -10,6 +10,7 @@ export type {
   SecondaryModelConfig,
   ProviderApiInfo,
 } from "./types/secondary-model.js";
+export type { DocsConfig, WebSearchConfig } from "./types/docs.js";
 
 export interface HeyyooConfig {
   secondary: import("./types/secondary-model.js").SecondaryModelConfig;
@@ -31,6 +32,8 @@ export interface HeyyooConfig {
   deepScan?: boolean | number;
   /** Per-model token-budget overrides. Key is the model id (e.g. "qwen3.7-max"). */
   modelInfo?: Record<string, { contextWindow?: number; maxOutputTokens?: number }>;
+  /** Optional documentation sources and web-search settings for yoo.suggest/recommend/explain. */
+  docs?: import("./types/docs.js").DocsConfig;
   /** Timeout in ms for child pi process calls (default 300000 = 5 min). */
   processTimeoutMs?: number;
   /** Timeout in ms per model in /yoo test (default 120000 = 2 min). */
@@ -163,6 +166,7 @@ export interface YooToolParams {
   vcs?: "git" | "svn";
   untracked?: boolean;
   verify?: boolean;
+  docs?: string[];
 }
 
 export interface YooToolResult {

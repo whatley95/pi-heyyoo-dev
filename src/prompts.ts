@@ -276,13 +276,15 @@ function buildSuggestPromptImpl(
   question: string,
   conventions?: string,
   nativeJson = false,
+  docContext = "",
 ): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const docsBlock = docContext ? `\n\n${docContext}` : "";
 
   return {
     system: `${PAIR_PROGRAMMER_PERSONA}
 
-The developer is asking for advice on a technical choice. Offer practical, balanced options.
+The developer is asking for advice on a technical choice. Offer practical, balanced options. Use the external documentation when it is provided.
 
 ${finalJsonBlock(
   `{
@@ -297,9 +299,10 @@ Rules:
 - Provide 2-3 concrete approaches
 - Each approach must have at least one pro and one con
 - Be specific — no vague advice like "use a better pattern"
-- Respect the project conventions shown above when evaluating approaches`,
+- Respect the project conventions shown above when evaluating approaches
+- Ground your answer in the external documentation when it is provided`,
 
-    user: `I need advice on:\n\n${question}${conventionsBlock}`,
+    user: `I need advice on:\n\n${question}${conventionsBlock}${docsBlock}`,
   };
 }
 
@@ -308,6 +311,7 @@ function buildRecommendPromptImpl(
   planTodo?: PlanTodoItem[],
   conventions?: string,
   nativeJson = false,
+  docContext = "",
 ): { system: string; user: string } {
   const planContext = planTodo?.length
     ? `\n\nCurrent plan (check items already done):\n${planTodo
@@ -316,11 +320,12 @@ function buildRecommendPromptImpl(
     : "";
 
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const docsBlock = docContext ? `\n\n${docContext}` : "";
 
   return {
     system: `${PAIR_PROGRAMMER_PERSONA}
 
-Advise the developer on what to do next. Be decisive and actionable.
+Advise the developer on what to do next. Be decisive and actionable. Use the external documentation when it is provided.
 
 ${finalJsonBlock(
   `{
@@ -336,9 +341,10 @@ Rules:
 - The step must be concrete and immediately actionable
 - Reasoning must explain the trade-off
 - Provide 1-2 alternatives that were considered but rejected
-- Respect the project conventions shown above when choosing file names, structure, and patterns`,
+- Respect the project conventions shown above when choosing file names, structure, and patterns
+- Ground your recommendation in the external documentation when it is provided`,
 
-    user: `Here's where I'm at:\n\n${situation}${planContext}${conventionsBlock}\n\nWhat should I do next?`,
+    user: `Here's where I'm at:\n\n${situation}${planContext}${conventionsBlock}${docsBlock}\n\nWhat should I do next?`,
   };
 }
 
@@ -507,6 +513,7 @@ function buildExplainPromptImpl(
   conventions?: string,
   indexSummary?: string,
   fileContents?: Array<{ file: string; content: string }>,
+  docContext = "",
 ): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
   const indexBlock = indexSummary ? `\n\n<project_index>\n${indexSummary}\n</project_index>` : "";
@@ -515,11 +522,12 @@ function buildExplainPromptImpl(
     fileContents && fileContents.length > 0
       ? `\n\n<file_contents>\n${fileContents.map((f) => `--- ${f.file} ---\n${f.content}`).join("\n\n")}\n</file_contents>`
       : "";
+  const docsBlock = docContext ? `\n\n${docContext}` : "";
 
   return {
     system: `${PAIR_PROGRAMMER_PERSONA}
 
-Explain the provided code, error, diff, or file to the developer. Be concise but complete. Assume they are a senior engineer who wants to understand what is happening and why.
+Explain the provided code, error, diff, or file to the developer. Be concise but complete. Assume they are a senior engineer who wants to understand what is happening and why. Use the external documentation when it is provided.
 
 Rules:
 - Start with a one-sentence summary
@@ -530,9 +538,10 @@ Rules:
 - Phrase any recommendations as suggestions, not as completed actions.
 - Do NOT include a "Next Steps" section that implies work has already been done.
 - Reference specific files, functions, or line numbers when available
+- Ground your explanation in the external documentation when it is provided
 - Do NOT include commentary outside the explanation`,
 
-    user: `Explain this:\n\n${target}${contextBlock}${conventionsBlock}${indexBlock}${filesBlock}`,
+    user: `Explain this:\n\n${target}${contextBlock}${conventionsBlock}${indexBlock}${filesBlock}${docsBlock}`,
   };
 }
 

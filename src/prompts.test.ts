@@ -875,4 +875,18 @@ describe("native JSON prompt instruction", () => {
     assert.ok(!prompt.system.includes("## Result"));
     assert.ok(prompt.system.includes("Return only valid JSON"));
   });
+
+  it("suggest prompt includes external docs when provided", () => {
+    const docs = '<external_docs>\n<doc_source name="react">docs</doc_source>\n</external_docs>';
+    const prompt = buildSuggestPrompt("question", "conventions", false, docs);
+    assert.ok(prompt.user.includes("<external_docs>"));
+    assert.ok(prompt.user.includes('<doc_source name="react">'));
+  });
+
+  it("recommend prompt includes external docs when provided", () => {
+    const docs = '<external_docs>\n<web_search query="q">results</web_search>\n</external_docs>';
+    const prompt = buildRecommendPrompt("situation", [], "conventions", false, docs);
+    assert.ok(prompt.user.includes("<external_docs>"));
+    assert.ok(prompt.user.includes('<web_search query="q">'));
+  });
 });

@@ -1,0 +1,139 @@
+import { describe, it, after, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { SearchResults } from "duck-duck-scrape";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { validateYooToolParams } from "./yoo-tool-params.js";
+import { handleYooSearchCommand } from "./yoo-search.js";
+import { setSearchFnForTests, resetSearchFnForTests } from "./doc-fetcher.js";
+
+function makeTempDir(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function mockCtx(cwd: string): ExtensionContext {
+  return { cwd } as unknown as ExtensionContext;
+}
+
+function writeProjectSettings(cwd: string, settings: Record<string, unknown>): void {
+  const dir = join(cwd, ".pi");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ "pi-heyyoo": settings }, null, 2) + "\n", "utf-8");
+}
+
+describe("validateYooToolParams", () => {
+  it("accepts a regular action with docs", () => {
+    const result = validateYooToolParams({ suggest: "useEffect vs useLayoutEffect", docs: ["react"] });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.action, "suggest");
+      assert.deepEqual(result.params.docs, ["react"]);
+      assert.equal("search" in result.params, false);
+    }
+  });
+
+  it("ignores a search parameter if present", () => {
+    const result = validateYooToolParams({ suggest: "Next.js caching", search: "Next.js caching 2024" });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.action, "suggest");
+      assert.equal("search" in result.params, false);
+    }
+  });
+
+  it("rejects a call with only a search parameter", () => {
+    const result = validateYooToolParams({ search: "something" });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.match(result.error, /No action specified/);
+    }
+  });
+});
+
+describe("handleYooSearchCommand", () => {
+  const tmpDirs: string[] = [];
+
+  after(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  });
+
+  afterEach(() => {
+    resetSearchFnForTests();
+  });
+
+  it("returns usage help when query is empty", async () => {
+    const result = await handleYooSearchCommand("  ", mockCtx(makeTempDir("yoo-search-empty-")));
+    assert.equal(result.content[0]?.text, "Usage: /yoo-search <query>");
+  });
+
+  it("reports when web search is disabled", async () => {
+    const cwd = makeTempDir("yoo-search-disabled-");
+    tmpDirs.push(cwd);
+    const result = await handleYooSearchCommand("react hooks", mockCtx(cwd));
+    assert.match(
+      result.content[0]?.text ?? "",
+      /Web search is disabled\. Enable it with pi-heyyoo\.docs\.webSearch\.enabled/,
+    );
+  });
+
+  it("returns formatted web search results when enabled", async () => {
+    const cwd = makeTempDir("yoo-search-enabled-");
+    tmpDirs.push(cwd);
+    writeProjectSettings(cwd, {
+      docs: {
+        sources: {},
+        webSearch: { enabled: true, maxResults: 2, maxCharsPerResult: 200 },
+      },
+    });
+
+    setSearchFnForTests(
+      async () =>
+        ({
+          noResults: false,
+          results: [
+            {
+              title: "React Hooks",
+              url: "https://react.dev/reference/react",
+              description: "Official React hooks reference",
+            },
+          ],
+        }) as unknown as SearchResults,
+    );
+
+    const result = await handleYooSearchCommand("react hooks", mockCtx(cwd));
+    const text = result.content[0]?.text ?? "";
+    assert.match(text, /Web search results for "react hooks"/);
+    assert.match(text, /<web_search query="react hooks">/);
+    assert.match(text, /React Hooks/);
+  });
+
+  it("reports no results when search returns nothing", async () => {
+    const cwd = makeTempDir("yoo-search-noresults-");
+    tmpDirs.push(cwd);
+    writeProjectSettings(cwd, {
+      docs: {
+        sources: {},
+        webSearch: { enabled: true, maxResults: 2, maxCharsPerResult: 200 },
+      },
+    });
+
+    setSearchFnForTests(
+      async () =>
+        ({
+          noResults: true,
+          results: [],
+        }) as unknown as SearchResults,
+    );
+
+    const result = await handleYooSearchCommand("xyz123nomatch", mockCtx(cwd));
+    assert.equal(result.content[0]?.text, 'No results for "xyz123nomatch".');
+  });
+});

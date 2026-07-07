@@ -40,12 +40,13 @@
   },
   "license": "MIT",
   "dependencies": {
+    "duck-duck-scrape": "^2.2.7",
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.75.0",
-    "@earendil-works/pi-coding-agent": ">=0.75.0",
     "@earendil-works/pi-ai": ">=0.75.0",
+    "@earendil-works/pi-coding-agent": ">=0.75.0",
     "@earendil-works/pi-tui": ">=0.75.0",
     "@sinclair/typebox": ">=0.34.0"
   },

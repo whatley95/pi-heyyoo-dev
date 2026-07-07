@@ -95,6 +95,59 @@ Structured tools let the secondary model write brief Markdown analysis, but the 
 | `modelInfo`                    | object                                  | Per-model token budget overrides, keyed by model id                                                                                 |
 | `processTimeoutMs`             | number                                  | Timeout in ms for child pi process calls (default: 300000 = 5 min)                                                                  |
 | `testTimeoutMs`                | number                                  | Timeout in ms per model in `/yoo test` (default: 120000 = 2 min)                                                                   |
+| `docs`                         | object                                  | Documentation sources and DuckDuckGo web-search settings for `yoo.suggest`, `yoo.recommend`, and `yoo_explain`                       |
+
+### Documentation sources and web search
+
+You can give `yoo.suggest`, `yoo.recommend`, and `yoo_explain` access to configured documentation pages. This is useful when the secondary model needs up-to-date library docs. For ad-hoc web search, use the `/yoo-search` command.
+
+```json
+{
+  "pi-heyyoo": {
+    "docs": {
+      "sources": {
+        "react": "https://react.dev/reference/react",
+        "pi": "https://pi.dev/docs/latest"
+      },
+      "maxCharsPerSource": 8000,
+      "webSearch": {
+        "enabled": true,
+        "maxResults": 3,
+        "maxCharsPerResult": 3000
+      }
+    }
+  }
+}
+```
+
+| Option                             | Type     | Description                                                             |
+| ---------------------------------- | -------- | ----------------------------------------------------------------------- |
+| `docs.sources`                     | object   | Named URL map. Only URLs listed here can be fetched.                    |
+| `docs.maxCharsPerSource`           | number   | Characters of each source page to include in the prompt (default: 8000) |
+| `docs.webSearch.enabled`           | boolean  | Whether `/yoo-search` is allowed (default: false)                       |
+| `docs.webSearch.maxResults`        | number   | Search results to include (default: 3)                                  |
+| `docs.webSearch.maxCharsPerResult` | number   | Characters of each search snippet to include (default: 3000)            |
+
+Use it from the `yoo` tool:
+
+```js
+yoo({ suggest: "useEffect vs useLayoutEffect", docs: ["react"] });
+yoo({ recommend: "what next", docs: ["pi"] });
+```
+
+Or from `yoo_explain`:
+
+```js
+yoo_explain({ target: "what is MCP", docs: ["pi"] });
+```
+
+For ad-hoc web search, use the terminal command:
+
+```text
+/yoo-search Next.js app router caching
+```
+
+Fetched source pages and search results are cached in `.pi/heyyoo/docs/` for 24 hours. Cache files are written with mode `0o600`. Only URLs declared in `docs.sources` are fetched; web search never fetches arbitrary result pages. Fetches time out after 10 seconds and responses larger than 500 KB are rejected. No credentials are sent.
 
 ## Tools
 
@@ -109,7 +162,10 @@ The `yoo` tool is called by the main agent during development:
 | `yoo({ review: "wrote middleware", revision: "HEAD~1" })`             | After each step                | Reviews changes against a specific revision                         |
 | `yoo({ review: "wrote middleware", untracked: true })`                | After each step                | Includes untracked (new) files in the review                        |
 | `yoo({ suggest: "how to..." })`                                       | When stuck or asked a question | Returns alternative approaches with pros/cons                       |
+| `yoo({ suggest: "...", docs: ["react"] })`                            | When stuck or asked a question | Includes configured docs in the suggestion prompt                   |
+
 | `yoo({ recommend: "what next" })`                                     | When unsure                    | Recommends next concrete step                                       |
+| `yoo({ recommend: "...", docs: ["pi"] })`                             | When unsure                    | Includes configured docs in the recommendation prompt               |
 | `yoo({ judge: "all done" })`                                          | Final review                   | Holistic review against original plan                               |
 | `yoo({ scan: true })`                                                 | Once per project               | Learns project conventions and architecture                         |
 | `yoo({ test: "added payment service" })`                              | After code changes             | Checks for failing tests, missing tests, and test-quality issues    |
@@ -147,6 +203,8 @@ Explain a code snippet, error message, diff, or file with the secondary model.
 | `yoo_explain({ target: "TypeError: Cannot read..." })` | Explains an error and the likely fix |
 | `yoo_explain({ target: "src/auth.ts" })` | Explains the purpose and structure of a file |
 | `yoo_explain({ target: "function verifySession", files: ["src/auth.ts"] })` | Explains a specific function with full file context |
+| `yoo_explain({ target: "what is MCP", docs: ["pi"] })` | Explains a concept using configured docs |
+| `yoo_explain({ target: "MCP", docs: ["pi"] })` | Explains a concept using configured docs |
 
 `yoo_explain` is read-only — it does not edit files. If you pass a merge conflict, it explains the conflicting versions and suggests resolutions, but it does not claim the files are resolved.
 
@@ -186,6 +244,7 @@ Recorded facts appear in `yoo_index({ topic: "learned" })`.
 | `/yoo-info`                                    | Alias for `/yoo-status`                                                                |
 | `/yoo-index [topic] [--update]`                | Read stored yoo context (plan, memory, conventions, cost, logs, index, learned)        |
 | `/yoo-explain <target> [--files ...]`          | Explain code, error, or file with the secondary model                                  |
+| `/yoo-search <query>`                          | Search the web via DuckDuckGo (requires `docs.webSearch.enabled`)                      |
 | `/yoo-learn <fact> [--category <cat>]`         | Record a persistent project fact                                                       |
 | `/yoo-learn --verify [--query <keyword>]`      | Check stored facts against the current codebase                                        |
 | `/yoo-learn --verify --deep [--query <keyword>]` | Check stored facts with the secondary model                                            |

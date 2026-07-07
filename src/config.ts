@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, getProjectConfigPath } from "./pi-paths.js";
 import { logEvent } from "./logger.js";
-import type { HeyyooConfig, SecondaryModelConfig, YooModelTask } from "./types.js";
+import type { HeyyooConfig, SecondaryModelConfig, YooModelTask, DocsConfig } from "./types.js";
 
 export { getAgentDir, getProjectConfigPath } from "./pi-paths.js";
 
@@ -84,6 +84,15 @@ export function loadHeyyooConfig(cwd: string): HeyyooConfig {
     preReviewCommands: [],
     reviewFullFileThresholdLines: 300,
     reviewStrategy: "auto",
+    docs: {
+      sources: {},
+      maxCharsPerSource: 8000,
+      webSearch: {
+        enabled: false,
+        maxResults: 3,
+        maxCharsPerResult: 3000,
+      },
+    },
   };
 
   if (existsSync(globalPath)) {
@@ -137,6 +146,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   "modelInfo",
   "processTimeoutMs",
   "testTimeoutMs",
+  "docs",
 ]);
 
 /** Warn about unknown config keys that might be typos. */
@@ -241,6 +251,57 @@ function mergeFlag(base: boolean | number | undefined, override: unknown): boole
   return base;
 }
 
+function pickPositiveInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || !Number.isInteger(value)) return fallback;
+  return value;
+}
+
+function mergeWebSearch(
+  base: NonNullable<DocsConfig["webSearch"]>,
+  override: unknown,
+): NonNullable<DocsConfig["webSearch"]> {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return base;
+  }
+  const o = override as Partial<DocsConfig["webSearch"]>;
+  return {
+    enabled: typeof o.enabled === "boolean" ? o.enabled : base.enabled,
+    maxResults: pickPositiveInteger(o.maxResults, base.maxResults),
+    maxCharsPerResult: pickPositiveInteger(o.maxCharsPerResult, base.maxCharsPerResult),
+  };
+}
+
+function mergeSources(base: DocsConfig["sources"], override: unknown): DocsConfig["sources"] {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return base;
+  }
+  const o = override as Record<string, unknown>;
+  const result: DocsConfig["sources"] = { ...base };
+  for (const [key, value] of Object.entries(o)) {
+    if (typeof value === "string" && value.length > 0) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function mergeDocs(base: DocsConfig | undefined, override: unknown): DocsConfig | undefined {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return base;
+  }
+  const b: DocsConfig = base ?? {
+    sources: {},
+    maxCharsPerSource: 8000,
+    webSearch: { enabled: false, maxResults: 3, maxCharsPerResult: 3000 },
+  };
+  const o = override as Partial<DocsConfig>;
+  return {
+    sources: mergeSources(b.sources, o.sources),
+    maxCharsPerSource: pickPositiveInteger(o.maxCharsPerSource, b.maxCharsPerSource),
+    webSearch: mergeWebSearch(b.webSearch, o.webSearch),
+  };
+}
+
 function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
   if (!override || typeof override !== "object" || Array.isArray(override)) {
     return base;
@@ -268,5 +329,6 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     modelInfo: mergeModelInfo(base.modelInfo, o.modelInfo),
     processTimeoutMs: pickOptionalNumber(o.processTimeoutMs, base.processTimeoutMs),
     testTimeoutMs: pickOptionalNumber(o.testTimeoutMs, base.testTimeoutMs),
+    docs: mergeDocs(base.docs, o.docs),
   };
 }

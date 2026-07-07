@@ -29,4 +29,28 @@ describe("yoo-explain", () => {
     assert.match(user, /export const x = 1;/);
     assert.match(user, /src\/demo.ts/);
   });
+
+  it("validates docs params", () => {
+    const result = validateYooExplainParams({
+      target: "MCP",
+      docs: ["pi", ""],
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.deepEqual(result.params.docs, ["pi"]);
+    }
+  });
+
+  it("builds explain prompt with external docs", () => {
+    const { user } = buildExplainPrompt(
+      "what is MCP",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '<external_docs>\n<doc_source name="pi">docs</doc_source>\n</external_docs>',
+    );
+    assert.match(user, /<external_docs>/);
+    assert.match(user, /<doc_source name="pi">/);
+  });
 });
