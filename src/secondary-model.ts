@@ -393,6 +393,7 @@ export async function callSecondaryModel(
         signal,
         thinking,
         modelInfoOverride,
+        sessionId,
       );
     }
     return await callOpenAiCompatibleApi(
@@ -1433,6 +1434,7 @@ async function callAnthropicApi(
   signal?: AbortSignal,
   thinking?: string,
   modelInfoOverride?: Partial<import("./model-registry.js").ModelInfo>,
+  sessionId?: string,
 ): Promise<{ content: string; usage: UsageCost }> {
   const url = `${apiInfo.baseUrl}/messages`;
 
@@ -1460,6 +1462,10 @@ async function callAnthropicApi(
     [apiInfo.authHeader]: `${apiInfo.authPrefix}${apiKey}`,
     "anthropic-version": "2023-06-01",
   };
+  // Sticky session routing for opencode-go/opencode, matching Pi's behavior.
+  if ((provider === "opencode-go" || provider === "opencode") && sessionId) {
+    headers["x-opencode-session"] = sessionId;
+  }
 
   const response = await fetchWithRetry(url, {
     method: "POST",
