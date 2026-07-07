@@ -577,10 +577,13 @@ describe("PROVIDER_API_MAP coverage", () => {
 });
 
 describe("per-model API overrides", () => {
-  it("opencode-go models are not in HTTP map (use pi backend)", () => {
+  it("opencode-go anthropic-messages models use HTTP, others use pi backend", () => {
     assert.equal(getProviderApiInfo("opencode-go", "kimi-k2.7-code"), undefined);
-    assert.equal(getProviderApiInfo("opencode-go", "qwen3.7-max"), undefined);
+    assert.equal(getProviderApiInfo("opencode-go", "deepseek-v4-pro"), undefined);
     assert.equal(getProviderApiInfo("opencode"), undefined);
+    const qwen = getProviderApiInfo("opencode-go", "qwen3.7-max");
+    assert.equal(qwen?.style, "anthropic");
+    assert.ok(qwen?.baseUrl.includes("opencode.ai"));
   });
 });
 

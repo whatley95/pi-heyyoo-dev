@@ -200,10 +200,64 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
 // Per-model API style overrides for providers that have mixed API styles.
 // Key format: "provider:model". When present, this overrides the provider-level
 // entry in PROVIDER_API_MAP for that specific model.
-// Note: opencode-go/opencode are NOT in the HTTP map (they use pi backend)
-// because their models have complex compat requirements beyond simple
-// openai-compatible/anthropic API styles.
-const MODEL_API_OVERRIDES: Record<string, ProviderApiInfo> = {};
+// Note: opencode-go/opencode are NOT in the HTTP map by default because most of
+// their models have complex compat requirements beyond simple
+// openai-compatible/anthropic API styles. However, specific models that use the
+// Anthropic messages API are routed directly via HTTP to avoid the pi backend
+// overhead and transient 503 errors from the provider's inference layer.
+const MODEL_API_OVERRIDES: Record<string, ProviderApiInfo> = {
+  // opencode-go models that use anthropic-messages API.
+  "opencode-go:qwen3.7-max": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+  "opencode-go:qwen3.7-plus": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+  "opencode-go:minimax-m3": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+  // opencode models that use anthropic-messages API.
+  "opencode:claude-fable-5": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+  "opencode:claude-haiku-4-5": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+  "opencode:claude-opus-4-1": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+  "opencode:claude-opus-4-5": {
+    style: "anthropic",
+    baseUrl: "https://opencode.ai/zen/v1",
+    authHeader: "x-api-key",
+    authPrefix: "",
+    supportsJsonObject: false,
+  },
+};
 
 export function getProviderApiInfo(provider: string, model?: string): ProviderApiInfo | undefined {
   const p = provider.toLowerCase();
@@ -270,9 +324,13 @@ export async function callSecondaryModel(
   provider = (effectiveSecondary?.provider || provider).toLowerCase();
   model = effectiveSecondary?.id || model;
   const thinking = optionsThinking ?? effectiveSecondary?.thinking;
-  // Auto-detect backend: use direct HTTP for known providers or custom baseUrl,
-  // fall back to pi process for unknown providers that need Pi's routing/auth layer.
-  const knownProvider = Object.hasOwn(PROVIDER_API_MAP, provider) || Boolean(effectiveSecondary?.baseUrl);
+  // Auto-detect backend: use direct HTTP for known providers, per-model overrides,
+  // or custom baseUrl. Fall back to pi process for providers that need Pi's
+  // routing/auth layer.
+  const knownProvider =
+    Object.hasOwn(PROVIDER_API_MAP, provider) ||
+    Boolean(getProviderApiInfo(provider, model)) ||
+    Boolean(effectiveSecondary?.baseUrl);
   const backend = effectiveSecondary?.backend ?? (knownProvider ? "http" : "pi");
 
   const modelInfoOverride = buildModelInfoOverride(effectiveSecondary, config?.modelInfo, model);
@@ -1425,11 +1483,10 @@ async function callAnthropicApi(
     throw new Error(`Secondary model API error: ${data.error.message}`);
   }
 
-  const textContent = data.content
-    ?.filter((c) => c.type === "text")
-    .map((c) => c.text ?? "")
-    .join("");
-  if (!textContent || textContent.trim().length === 0) {
+  const textBlocks = data.content?.filter((c) => c.type === "text").map((c) => c.text ?? "") ?? [];
+  const thinkingBlocks = data.content?.filter((c) => c.type === "thinking").map((c) => c.thinking ?? "") ?? [];
+  const textContent = (textBlocks.length > 0 ? textBlocks : thinkingBlocks).join("");
+  if (textContent.trim().length === 0) {
     throw new Error(`Empty response from secondary model. Raw: ${JSON.stringify(data).slice(0, 800)}`);
   }
 
