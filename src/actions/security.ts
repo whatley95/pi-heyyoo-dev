@@ -11,7 +11,13 @@ import {
   getSecurityValidationErrors,
   salvageSecurityFromMarkdown,
 } from "../prompts.js";
-import { STAGES, secondaryModelLabel, recordCostWithBudget, parseStructuredResult } from "./shared.js";
+import {
+  STAGES,
+  secondaryModelLabel,
+  recordCostWithBudget,
+  parseStructuredResult,
+  createStreamProgressCallback,
+} from "./shared.js";
 import { getSessionContext } from "./review-helpers.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult } from "../types.js";
@@ -105,6 +111,7 @@ export async function executeYooSecurity(
     sessionManager: ctx.sessionManager,
     task: "security",
     structuredOutput: true,
+    onStreamProgress: createStreamProgressCallback(progress, 4, STAGES.security),
   });
 
   progress(5, STAGES.security, "Parsing security audit…");

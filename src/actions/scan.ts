@@ -14,7 +14,7 @@ import { resolveModelInfo } from "../model-registry.js";
 import { estimateTokens } from "../token-budget.js";
 import { buildProjectIndex, saveProjectIndex } from "../project-index.js";
 import { logEvent } from "../logger.js";
-import { STAGES, secondaryModelLabel, recordCostWithBudget } from "./shared.js";
+import { STAGES, secondaryModelLabel, recordCostWithBudget, createStreamProgressCallback } from "./shared.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult } from "../types.js";
 
@@ -86,7 +86,15 @@ export async function executeYooScan(
     modelConfig.id,
     system,
     `${user}\n\nFiles:\n${filesForPrompt.join("\n")}${configFilesText}${deepScanText}`,
-    { signal, thinking: modelConfig.thinking, cwd, sessionManager, task: "scan", structuredOutput: true },
+    {
+      signal,
+      thinking: modelConfig.thinking,
+      cwd,
+      sessionManager,
+      task: "scan",
+      structuredOutput: true,
+      onStreamProgress: createStreamProgressCallback(progress, 2, STAGES.scan),
+    },
   );
 
   progress(3, STAGES.scan, "Merging conventions…");

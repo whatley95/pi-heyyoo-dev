@@ -10,7 +10,13 @@ import {
 } from "../prompts.js";
 import { getPastIssuesForFiles } from "../review-memory.js";
 import { getState, buildReviewHistory } from "../session-state.js";
-import { STAGES, secondaryModelLabel, recordCostWithBudget, parseStructuredResult } from "./shared.js";
+import {
+  STAGES,
+  secondaryModelLabel,
+  recordCostWithBudget,
+  parseStructuredResult,
+  createStreamProgressCallback,
+} from "./shared.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult } from "../types.js";
 
@@ -55,6 +61,7 @@ export async function executeYooJudge(
     sessionManager,
     task: "judge",
     structuredOutput: true,
+    onStreamProgress: createStreamProgressCallback(progress, 2, STAGES.judge),
   });
 
   progress(3, STAGES.judge, "Parsing judgment…");

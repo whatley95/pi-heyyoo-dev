@@ -4,7 +4,13 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SearchResults, SearchResult } from "duck-duck-scrape";
-import { loadDocContext, setSearchFnForTests, resetSearchFnForTests } from "./doc-fetcher.js";
+import {
+  loadDocContext,
+  setSearchFnForTests,
+  resetSearchFnForTests,
+  setBraveSearchFnForTests,
+  resetBraveSearchFnForTests,
+} from "./doc-fetcher.js";
 import type { DocsConfig } from "./types.js";
 
 function makeTempDir(prefix: string): string {
@@ -44,6 +50,7 @@ describe("doc-fetcher", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     resetSearchFnForTests();
+    resetBraveSearchFnForTests();
   });
 
   it("returns empty string when no docs or search are requested", async () => {
@@ -340,5 +347,86 @@ describe("doc-fetcher", () => {
     const result = await loadDocContext(cwd, makeConfig(), { docs: ["react"], search: "react hooks" });
     assert.match(result, /<doc_source name="react">/);
     assert.match(result, /<web_search query="react hooks">/);
+  });
+
+  it("uses Brave search when provider is brave and API key is configured", async () => {
+    const cwd = makeTempDir("doc-fetcher-brave-");
+    tmpDirs.push(cwd);
+
+    let braveCalled = false;
+    setBraveSearchFnForTests(async (query, apiKey, maxResults) => {
+      braveCalled = true;
+      assert.equal(query, "brave query");
+      assert.equal(apiKey, "brave-key");
+      assert.equal(maxResults, 2);
+      return [{ title: "Brave Result", url: "https://brave.example.com", description: "Brave <b>snippet</b>" }];
+    });
+
+    const result = await loadDocContext(
+      cwd,
+      makeConfig({
+        webSearch: { enabled: true, maxResults: 2, maxCharsPerResult: 100, provider: "brave", apiKey: "brave-key" },
+      }),
+      { search: "brave query" },
+    );
+
+    assert.ok(braveCalled);
+    assert.match(result, /Brave Result/);
+    assert.match(result, /https:\/\/brave.example.com/);
+    assert.match(result, /Brave snippet/);
+    assert.doesNotMatch(result, /<b>/);
+  });
+
+  it("auto-detects Brave search when apiKey is set without explicit provider", async () => {
+    const cwd = makeTempDir("doc-fetcher-brave-auto-");
+    tmpDirs.push(cwd);
+
+    let braveCalled = false;
+    setBraveSearchFnForTests(async () => {
+      braveCalled = true;
+      return [{ title: "Auto Brave", url: "https://auto.example.com", description: "auto" }];
+    });
+
+    const result = await loadDocContext(
+      cwd,
+      makeConfig({ webSearch: { enabled: true, maxResults: 1, maxCharsPerResult: 100, apiKey: "brave-key" } }),
+      { search: "auto brave" },
+    );
+
+    assert.ok(braveCalled);
+    assert.match(result, /Auto Brave/);
+  });
+
+  it("falls back to DuckDuckGo when Brave is selected but no API key is available", async () => {
+    const cwd = makeTempDir("doc-fetcher-brave-nokey-");
+    tmpDirs.push(cwd);
+
+    let duckCalled = false;
+    setSearchFnForTests(async () => {
+      duckCalled = true;
+      return {
+        results: [
+          {
+            title: "Duck Result",
+            url: "https://duck.example.com",
+            description: "duck",
+            rawDescription: "duck",
+            hostname: "duck",
+            icon: "",
+          },
+        ],
+        noResults: false,
+        vqd: "vqd",
+      } as unknown as SearchResults;
+    });
+
+    const result = await loadDocContext(
+      cwd,
+      makeConfig({ webSearch: { enabled: true, maxResults: 1, maxCharsPerResult: 100, provider: "brave" } }),
+      { search: "no key" },
+    );
+
+    assert.ok(duckCalled);
+    assert.match(result, /Duck Result/);
   });
 });

@@ -112,6 +112,7 @@ You can give `yoo.suggest`, `yoo.recommend`, and `yoo_explain` access to configu
       "maxCharsPerSource": 8000,
       "webSearch": {
         "enabled": true,
+        "provider": "brave",
         "maxResults": 3,
         "maxCharsPerResult": 3000
       }
@@ -120,13 +121,15 @@ You can give `yoo.suggest`, `yoo.recommend`, and `yoo_explain` access to configu
 }
 ```
 
-| Option                             | Type     | Description                                                             |
-| ---------------------------------- | -------- | ----------------------------------------------------------------------- |
-| `docs.sources`                     | object   | Named URL map. Only URLs listed here can be fetched.                    |
-| `docs.maxCharsPerSource`           | number   | Characters of each source page to include in the prompt (default: 8000) |
-| `docs.webSearch.enabled`           | boolean  | Whether `/yoo-search` is allowed (default: false)                       |
-| `docs.webSearch.maxResults`        | number   | Search results to include (default: 3)                                  |
-| `docs.webSearch.maxCharsPerResult` | number   | Characters of each search snippet to include (default: 3000)            |
+| Option                             | Type                    | Description                                                                 |
+| ---------------------------------- | ----------------------- | --------------------------------------------------------------------------- |
+| `docs.sources`                     | object                  | Named URL map. Only URLs listed here can be fetched.                        |
+| `docs.maxCharsPerSource`           | number                  | Characters of each source page to include in the prompt (default: 8000)     |
+| `docs.webSearch.enabled`           | boolean                 | Whether `/yoo-search` is allowed (default: false)                           |
+| `docs.webSearch.provider`          | `"duckduckgo" \| "brave"` | Search provider. Defaults to "brave" when a Brave API key is available, else "duckduckgo" |
+| `docs.webSearch.apiKey`            | string                  | Inline Brave API key (prefer auth.json or `BRAVE_API_KEY` env var)          |
+| `docs.webSearch.maxResults`        | number                  | Search results to include (default: 3)                                      |
+| `docs.webSearch.maxCharsPerResult` | number                  | Characters of each search snippet to include (default: 3000)                |
 
 Use it from the `yoo` tool:
 
@@ -146,6 +149,15 @@ For ad-hoc web search, use the terminal command:
 ```text
 /yoo-search Next.js app router caching
 ```
+
+**Brave Search.** If you have a Brave Search API key, pi-heyyoo will use Brave automatically. Configure it via TUI with `/yoo-search-config` (interactive provider picker) or inline:
+
+```text
+/yoo-search-config brave <your-api-key>
+/yoo-search-config duckduckgo
+```
+
+API key resolution order: `docs.webSearch.apiKey` → `~/.pi/agent/auth.json` `brave` entry → `BRAVE_API_KEY` env var. If Brave is selected but no key is found, pi-heyyoo falls back to DuckDuckGo.
 
 Fetched source pages and search results are cached in `.pi/heyyoo/docs/` for 24 hours. Cache files are written with mode `0o600`. Only URLs declared in `docs.sources` are fetched; web search never fetches arbitrary result pages. Fetches time out after 10 seconds and responses larger than 500 KB are rejected. No credentials are sent.
 
@@ -420,6 +432,12 @@ When the user asks a technical or architectural question, call `yoo.suggest` or 
 | deepseek, etc. | Use the SDK for built-in retry/cache behavior and future-proof model support               |
 
 SDK backend defaults mirror the main Pi agent: `cacheRetention: "short"`, `maxRetries: 3`, and `timeoutMs: 300000`. For `opencode`/`opencode-go` calls, pi-heyyoo also sends the `x-opencode-session` and `x-opencode-client: pi` attribution headers when a session id is available.
+
+**Credential resolution:** The SDK backend first uses pi-heyyoo's own key lookup (`secondary.apiKey` → `~/.pi/agent/auth.json` → environment variables → `!command` execution). If no explicit key is found, it falls back to the `pi-ai` SDK's credential resolution, which can read Pi's `CredentialStore` (e.g. `~/.pi/agent/auth.json`) and provider env vars. This means yoo often works without any extra key configuration if the main Pi agent is already set up.
+
+**Transient-failure fallback:** If the SDK backend fails with a retryable provider error (5xx, rate limit, network timeout), pi-heyyoo automatically falls back to the `pi` backend once before giving up.
+
+**Streaming progress:** For SDK backend calls, generated text is streamed to the TUI so long `suggest`, `plan`, `review`, and other operations show live progress instead of waiting silently.
 
 **Auto-detect:** When no `backend` is explicitly set, pi-heyyoo uses the `sdk` backend for all providers. Direct HTTP is used only when `secondary.baseUrl` is set or when `secondary.backend` is explicitly `"http"`. Set `secondary.backend` to `"sdk"`, `"pi"`, or `"http"` to override.
 

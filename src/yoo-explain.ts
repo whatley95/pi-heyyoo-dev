@@ -8,6 +8,7 @@ import { logEvent } from "./logger.js";
 import { resolveProjectPath } from "./path-security.js";
 import { buildExplainPrompt } from "./prompts.js";
 import { loadDocContext, type DocContextRequest } from "./doc-fetcher.js";
+import { createStreamProgressCallback } from "./actions/shared.js";
 import type { ProgressReporter } from "./progress.js";
 import type { ExplainResult, UsageCost } from "./types.js";
 
@@ -110,6 +111,7 @@ export async function executeYooExplain(
     cwd,
     sessionManager,
     task: "explain",
+    onStreamProgress: createStreamProgressCallback(progress, hasDocs ? 4 : 3, totalStages),
   });
 
   const cost = recordCost(cwd, usage, config.costBudgetUsd);

@@ -489,7 +489,7 @@ export async function verifyLearnedFactsDeep(
 ): Promise<{ results: LearnedFactVerification[]; cost: UsageCost }> {
   const config = loadHeyyooConfig(cwd);
   const modelConfig = resolveTaskModel(config, "explain");
-  if (!modelConfig.provider || !modelConfig.id) {
+  if (!callModel && (!modelConfig.provider || !modelConfig.id)) {
     throw new Error("No secondary model configured. Set pi-heyyoo.secondary in settings.json.");
   }
 

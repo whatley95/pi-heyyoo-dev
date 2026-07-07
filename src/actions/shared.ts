@@ -2,6 +2,7 @@ import { recordCost } from "../cost-tracker.js";
 import { loadHeyyooConfig } from "../config.js";
 import { logEvent } from "../logger.js";
 import { parseJsonResponse, getJsonParseError } from "../prompts.js";
+import type { ProgressReporter } from "../progress.js";
 import type { UsageCost, SecondaryModelConfig } from "../types.js";
 
 export const STAGES = {
@@ -19,6 +20,17 @@ export function secondaryModelLabel(secondary: SecondaryModelConfig): string {
   const { provider, id, backend } = secondary;
   const label = provider && id ? `${provider}:${id}` : "secondary model";
   return backend ? `${label} (${backend})` : label;
+}
+
+export function createStreamProgressCallback(
+  progress: ProgressReporter,
+  stage: number,
+  total: number,
+): (text: string) => void {
+  return (text) => {
+    const preview = text.slice(0, 60).replace(/\s+/g, " ").trim();
+    progress(stage, total, preview ? `Generating: ${preview}…` : "Generating response…");
+  };
 }
 
 export function recordCostWithBudget(cwd: string, usage: UsageCost): UsageCost {

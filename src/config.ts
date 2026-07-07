@@ -91,6 +91,8 @@ export function loadHeyyooConfig(cwd: string): HeyyooConfig {
         enabled: false,
         maxResults: 3,
         maxCharsPerResult: 3000,
+        provider: undefined,
+        apiKey: undefined,
       },
     },
   };
@@ -268,6 +270,8 @@ function mergeWebSearch(
     enabled: typeof o.enabled === "boolean" ? o.enabled : base.enabled,
     maxResults: pickPositiveInteger(o.maxResults, base.maxResults),
     maxCharsPerResult: pickPositiveInteger(o.maxCharsPerResult, base.maxCharsPerResult),
+    provider: pickOptionalEnum(o.provider, ["duckduckgo", "brave"], base.provider),
+    apiKey: pickOptionalString(o.apiKey, base.apiKey),
   };
 }
 

@@ -1,4 +1,4 @@
-import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AssistantMessageEvent, Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { resolveApiKey } from "../auth-reader.js";
 import { logEvent } from "../logger.js";
 import { resolveModelInfo } from "../model-registry.js";
@@ -41,6 +41,33 @@ export async function getPiAiCompat(): Promise<PiAiCompatModule> {
     } as PiAiCompatModule;
   }
   return import("@earendil-works/pi-ai/compat");
+}
+
+function createStreamProgressHandler(
+  onProgress: (text: string) => void,
+  minIntervalMs = 150,
+): { handle(event: AssistantMessageEvent): void; flush(): void } {
+  let accumulated = "";
+  let lastReported = 0;
+
+  const report = () => {
+    lastReported = Date.now();
+    onProgress(accumulated);
+  };
+
+  return {
+    handle(event) {
+      if (event.type === "text_delta" && typeof event.delta === "string") {
+        accumulated += event.delta;
+        if (Date.now() - lastReported >= minIntervalMs) {
+          report();
+        }
+      }
+    },
+    flush() {
+      if (accumulated) report();
+    },
+  };
 }
 
 function sdkPayloadType(payload: unknown): string {
@@ -87,12 +114,17 @@ export async function callSdkBackend(
 ): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
   const { signal, thinking, cwd, secondary, modelInfoOverride, sdkModelInfo } = options;
 
-  const apiKey = resolveApiKey(provider, secondary?.apiKey);
-  if (!apiKey) {
-    throw new Error(
-      `No API key found for provider "${provider}". Set the appropriate environment variable, configure auth.json, ` +
-        `or set pi-heyyoo.secondary.apiKey.`,
-    );
+  // Prefer pi-heyyoo's auth resolution (auth.json with indirection, env vars,
+  // inline key), but fall back to the SDK's own credential/env lookup when no
+  // explicit key is configured. The pi-ai SDK can read Pi's CredentialStore
+  // (e.g. ~/.pi/agent/auth.json) and provider env vars on its own.
+  const apiKey = resolveApiKey(provider, secondary?.apiKey) ?? undefined;
+  if (!apiKey && cwd) {
+    logEvent(cwd, "debug", "No explicit API key for SDK backend; relying on SDK credential resolution", {
+      provider,
+      model,
+      backend: "sdk",
+    });
   }
 
   const piAi = await getPiAiCompat();
@@ -159,6 +191,22 @@ export async function callSdkBackend(
   sdkOptions.maxTokens = thinkingEnabledForBudget ? maxOutputTokens : Math.min(maxOutputTokens, 2048);
 
   const stream = piAi.streamSimple(builtinModel, context, sdkOptions);
+
+  // Stream progress to the TUI when a callback is provided. We throttle updates
+  // to avoid saturating the UI with every token.
+  if (options.onStreamProgress) {
+    const progress = createStreamProgressHandler(options.onStreamProgress);
+    try {
+      for await (const event of stream) {
+        progress.handle(event);
+        if (event.type === "done" || event.type === "error") break;
+      }
+    } catch {
+      // The final result() call will surface the real error; ignore iterator errors.
+    }
+    progress.flush();
+  }
+
   const message = await stream.result();
 
   if (message.stopReason === "error" || message.stopReason === "aborted") {

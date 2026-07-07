@@ -10,7 +10,7 @@ import { estimateTokens, type ReviewBudget } from "../token-budget.js";
 import { type FileContentEntry } from "../file-loader.js";
 import type { ProgressReporter } from "../progress.js";
 import type { ReviewResult, ReviewVerdict, SecondaryModelConfig, UsageCost } from "../types.js";
-import { STAGES, secondaryModelLabel, parseStructuredResult } from "./shared.js";
+import { STAGES, secondaryModelLabel, parseStructuredResult, createStreamProgressCallback } from "./shared.js";
 
 const MAX_SESSION_CONTEXT_CHARS = 4000;
 
@@ -195,6 +195,7 @@ export async function runReviewBatch(input: ReviewBatchInput): Promise<{ review:
     relevantPaths,
     task: "review",
     structuredOutput: true,
+    onStreamProgress: progress ? createStreamProgressCallback(progress, 8, STAGES.review) : undefined,
   });
 
   const review = parseStructuredResult(cwd, raw, {

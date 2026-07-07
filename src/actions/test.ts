@@ -9,7 +9,13 @@ import { loadFileContentsForReview, type FileContentEntry } from "../file-loader
 import { runPreReviewCommands, formatPreReviewOutput } from "../pre-review.js";
 import { calculateReviewBudget } from "../token-budget.js";
 import { buildTestPrompt, validateTestResult, getTestValidationErrors, salvageTestFromMarkdown } from "../prompts.js";
-import { STAGES, secondaryModelLabel, recordCostWithBudget, parseStructuredResult } from "./shared.js";
+import {
+  STAGES,
+  secondaryModelLabel,
+  recordCostWithBudget,
+  parseStructuredResult,
+  createStreamProgressCallback,
+} from "./shared.js";
 import { getSessionContext } from "./review-helpers.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult, Conventions } from "../types.js";
@@ -120,6 +126,7 @@ export async function executeYooTest(
     sessionManager: ctx.sessionManager,
     task: "test",
     structuredOutput: true,
+    onStreamProgress: createStreamProgressCallback(progress, 6, STAGES.test),
   });
 
   progress(7, STAGES.test, "Parsing test result…");

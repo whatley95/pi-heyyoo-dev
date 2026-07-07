@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as dds from "duck-duck-scrape";
+import { resolveApiKey } from "./auth-reader.js";
 import { getProjectConfigPath } from "./pi-paths.js";
 import { logEvent } from "./logger.js";
-import type { DocsConfig } from "./types.js";
+import type { DocsConfig, WebSearchConfig, WebSearchProvider } from "./types.js";
 
 export interface DocContextRequest {
   docs?: string[];
@@ -28,6 +29,35 @@ export function setSearchFnForTests(fn: SearchFn): void {
 /** Restore the real DuckDuckGo search function. */
 export function resetSearchFnForTests(): void {
   searchFn = dds.search;
+}
+
+type BraveSearchResult = {
+  title: string;
+  url: string;
+  description?: string;
+};
+
+let braveSearchFn: ((query: string, apiKey: string, maxResults: number) => Promise<BraveSearchResult[]>) | null = null;
+
+/** Replace the Brave search function for tests. */
+export function setBraveSearchFnForTests(
+  fn: (query: string, apiKey: string, maxResults: number) => Promise<BraveSearchResult[]>,
+): void {
+  braveSearchFn = fn;
+}
+
+/** Restore the real Brave search function. */
+export function resetBraveSearchFnForTests(): void {
+  braveSearchFn = null;
+}
+
+function resolveBraveApiKey(config?: { apiKey?: string }): string | undefined {
+  return config?.apiKey ?? resolveApiKey("brave");
+}
+
+function detectWebSearchProvider(config: WebSearchConfig): WebSearchProvider {
+  if (config.provider) return config.provider;
+  return resolveBraveApiKey(config) ? "brave" : "duckduckgo";
 }
 
 function getDocsCacheDir(cwd: string): string {
@@ -141,38 +171,96 @@ async function fetchDocSource(
   }
 }
 
-async function searchWeb(
+async function searchBrave(query: string, apiKey: string, maxResults: number): Promise<BraveSearchResult[]> {
+  const testFn = braveSearchFn;
+  if (testFn) return testFn(query, apiKey, maxResults);
+
+  const url = new URL("https://api.search.brave.com/res/v1/web/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(Math.min(Math.max(maxResults, 1), 20)));
+  url.searchParams.set("offset", "0");
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "X-Subscription-Token": apiKey,
+    },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Brave search failed (${response.status}): ${body.slice(0, 200)}`);
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  const web = data.web as Record<string, unknown> | undefined;
+  const results = Array.isArray(web?.results) ? (web.results as BraveSearchResult[]) : [];
+  return results;
+}
+
+async function searchDuckDuckGo(
   cwd: string,
   query: string,
   maxResults: number,
   maxCharsPerResult: number,
 ): Promise<string | null> {
-  const cacheFile = `search-${hashQuery(query)}.txt`;
+  logEvent(cwd, "info", "Performing DuckDuckGo web search", { query });
+  const results = await searchFn(query, { safeSearch: dds.SafeSearchType.STRICT });
+  if (!results.results || results.results.length === 0) {
+    logEvent(cwd, "info", "DuckDuckGo web search returned no results", { query });
+    return null;
+  }
+  const parts: string[] = [];
+  for (const result of results.results.slice(0, maxResults)) {
+    const snippet = stripHtml(result.description || result.rawDescription || "").slice(0, maxCharsPerResult);
+    parts.push(`Title: ${result.title}\nURL: ${result.url}\n${snippet}`);
+  }
+  return parts.join("\n\n");
+}
+
+async function searchWeb(cwd: string, query: string, config: WebSearchConfig): Promise<string | null> {
+  const maxResults = config.maxResults;
+  const maxCharsPerResult = config.maxCharsPerResult;
+  const requestedProvider = detectWebSearchProvider(config);
+  const braveApiKey = requestedProvider === "brave" ? resolveBraveApiKey(config) : undefined;
+  const provider = requestedProvider === "brave" && !braveApiKey ? "duckduckgo" : requestedProvider;
+
+  const cacheFile = `search-${provider}-${hashQuery(query)}.txt`;
   const cached = cacheHit(join(getDocsCacheDir(cwd), cacheFile));
   if (cached !== null) {
-    logEvent(cwd, "info", "Web search cache hit", { query });
+    logEvent(cwd, "info", "Web search cache hit", { query, provider });
     return cached;
   }
 
-  logEvent(cwd, "info", "Performing web search", { query });
+  logEvent(cwd, "info", "Performing web search", { query, provider });
   try {
-    const results = await searchFn(query, { safeSearch: dds.SafeSearchType.STRICT });
-    if (!results.results || results.results.length === 0) {
-      logEvent(cwd, "info", "Web search returned no results", { query });
-      return null;
+    let formatted: string | null = null;
+    if (provider === "brave") {
+      const results = await searchBrave(query, braveApiKey!, maxResults);
+      if (results.length === 0) {
+        logEvent(cwd, "info", "Brave web search returned no results", { query });
+        return null;
+      }
+      const parts: string[] = [];
+      for (const result of results.slice(0, maxResults)) {
+        const snippet = stripHtml(result.description ?? "").slice(0, maxCharsPerResult);
+        parts.push(`Title: ${result.title}\nURL: ${result.url}\n${snippet}`);
+      }
+      formatted = parts.join("\n\n");
+    } else {
+      formatted = await searchDuckDuckGo(cwd, query, maxResults, maxCharsPerResult);
     }
-    const parts: string[] = [];
-    for (const result of results.results.slice(0, maxResults)) {
-      const snippet = stripHtml(result.description || result.rawDescription || "").slice(0, maxCharsPerResult);
-      parts.push(`Title: ${result.title}\nURL: ${result.url}\n${snippet}`);
+
+    if (formatted) {
+      writeCache(cwd, cacheFile, formatted);
+      logEvent(cwd, "info", "Web search completed", { query, provider, results: formatted.split("\n\n").length });
     }
-    const formatted = parts.join("\n\n");
-    writeCache(cwd, cacheFile, formatted);
-    logEvent(cwd, "info", "Web search completed", { query, results: parts.length });
     return formatted;
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    logEvent(cwd, "warn", "Web search failed", { query, error });
+    logEvent(cwd, "warn", "Web search failed", { query, provider, error });
     return null;
   }
 }
@@ -205,12 +293,7 @@ export async function loadDocContext(
   }
 
   if (request.search && config.webSearch.enabled) {
-    const searchResult = await searchWeb(
-      cwd,
-      request.search,
-      config.webSearch.maxResults,
-      config.webSearch.maxCharsPerResult,
-    );
+    const searchResult = await searchWeb(cwd, request.search, config.webSearch);
     if (searchResult) {
       blocks.push(`<web_search query="${request.search}">\n${searchResult}\n</web_search>`);
     }

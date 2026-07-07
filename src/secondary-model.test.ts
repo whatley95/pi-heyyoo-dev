@@ -738,6 +738,21 @@ function fakeSdkStream(message: AssistantMessage): import("@earendil-works/pi-ai
   } as unknown as import("@earendil-works/pi-ai").AssistantMessageEventStream;
 }
 
+function fakeSdkStreamingStream(
+  deltas: string[],
+  finalMessage: AssistantMessage,
+): import("@earendil-works/pi-ai").AssistantMessageEventStream {
+  return {
+    result: async () => finalMessage,
+    [Symbol.asyncIterator]: async function* () {
+      for (const delta of deltas) {
+        yield { type: "text_delta", contentIndex: 0, delta, partial: finalMessage };
+      }
+      yield { type: "done", reason: "stop", message: finalMessage };
+    },
+  } as unknown as import("@earendil-works/pi-ai").AssistantMessageEventStream;
+}
+
 describe("sdk backend", () => {
   let tmpDirs: string[] = [];
 
@@ -997,6 +1012,27 @@ describe("sdk backend", () => {
     assert.equal(receivedOptions?.headers?.["x-opencode-client"], undefined);
   });
 
+  it("sdk backend invokes onStreamProgress with accumulated text", async () => {
+    const cwd = makeTempDir("yoo-sdk-stream-progress-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() =>
+      fakeSdkStreamingStream(["hello", " ", "world"], fakeSdkAssistantMessage("hello world")),
+    );
+
+    const progressTexts: string[] = [];
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", {
+      cwd,
+      onStreamProgress: (text) => progressTexts.push(text),
+    });
+
+    assert.equal(content, "hello world");
+    assert.ok(progressTexts.length > 0);
+    assert.equal(progressTexts[progressTexts.length - 1], "hello world");
+  });
+
   it("sdk backend maps cacheRetention auto to short", async () => {
     const cwd = makeTempDir("yoo-sdk-auto-cache-");
     tmpDirs.push(cwd);
@@ -1011,5 +1047,67 @@ describe("sdk backend", () => {
 
     await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
     assert.equal(receivedOptions?.cacheRetention, "short");
+  });
+
+  it("sdk backend falls back to SDK credential resolution when no explicit key is configured", async () => {
+    const cwd = makeTempDir("yoo-sdk-credential-store-");
+    tmpDirs.push(cwd);
+    // Use a provider name with no env var mapping so pi-heyyoo's auth-reader
+    // returns undefined, forcing reliance on the SDK's own credential lookup.
+    writeSettings(cwd, { provider: "no-env-provider", id: "model-x" });
+
+    let sdkCalled = false;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride((_model, _context, options) => {
+      sdkCalled = true;
+      assert.equal(options?.apiKey, undefined);
+      return fakeSdkStream(fakeSdkAssistantMessage("sdk credential ok"));
+    });
+
+    const { content } = await callSecondaryModel("no-env-provider", "model-x", "system", "user", { cwd });
+    assert.equal(content, "sdk credential ok");
+    assert.ok(sdkCalled);
+  });
+
+  it("sdk backend falls back to pi backend on retryable SDK error", async () => {
+    const cwd = makeTempDir("yoo-sdk-fallback-pi-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      throw new Error("503 Inference is temporarily unavailable");
+    });
+
+    const script = join(cwd, "fake-pi-fallback.js");
+    writeFileSync(
+      script,
+      `console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"pi fallback ok"}],usage:{input:10,output:5,cost:0.0001}}}));`,
+      "utf-8",
+    );
+    setPiSpawnResolver(() => ({ command: process.execPath, prefixArgs: [script] }));
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(content, "pi fallback ok");
+  });
+
+  it("sdk fallback surfaces both errors when pi backend also fails", async () => {
+    const cwd = makeTempDir("yoo-sdk-fallback-pi-fail-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      throw new Error("503 Inference is temporarily unavailable");
+    });
+
+    const script = join(cwd, "fake-pi-fallback-fail.js");
+    writeFileSync(script, `process.stderr.write("pi also down"); process.exit(1);`, "utf-8");
+    setPiSpawnResolver(() => ({ command: process.execPath, prefixArgs: [script] }));
+
+    await assert.rejects(
+      () => callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd }),
+      /SDK backend failed: 503 Inference is temporarily unavailable; pi fallback also failed:.*pi also down/,
+    );
   });
 });

@@ -32,6 +32,25 @@ export {
   setSdkGetModelOverride,
 };
 
+function isRetryableBackendError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("503") ||
+    msg.includes("502") ||
+    msg.includes("504") ||
+    msg.includes("temporarily unavailable") ||
+    msg.includes("rate limit") ||
+    msg.includes("too many requests") ||
+    msg.includes("timeout") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("etimedout") ||
+    msg.includes("network error") ||
+    msg.includes("fetch failed")
+  );
+}
+
 export async function callSecondaryModel(
   provider: string,
   model: string,
@@ -92,6 +111,7 @@ export async function callSecondaryModel(
         secondary: effectiveSecondary,
         modelInfoOverride,
         sdkModelInfo,
+        onStreamProgress: options.onStreamProgress,
       });
     }
 
@@ -124,6 +144,40 @@ export async function callSecondaryModel(
       structuredOutput,
     );
   } catch (err) {
+    if (backend === "sdk" && isRetryableBackendError(err)) {
+      if (cwd) {
+        logEvent(cwd, "warn", "SDK backend failed with retryable error; falling back to pi backend", {
+          provider,
+          model,
+          thinking,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      try {
+        return await callPiBackend(provider, model, systemPrompt, userPrompt, {
+          signal,
+          thinking,
+          cwd,
+          sessionManager,
+          relevantPaths,
+        });
+      } catch (piErr) {
+        const sdkMsg = err instanceof Error ? err.message : String(err);
+        const piMsg = piErr instanceof Error ? piErr.message : String(piErr);
+        const combined = new Error(`SDK backend failed: ${sdkMsg}; pi fallback also failed: ${piMsg}`);
+        if (cwd) {
+          logEvent(cwd, "error", combined.message, {
+            provider,
+            model,
+            thinking,
+            promptTokensEstimate: Math.ceil((systemPrompt.length + userPrompt.length) / 4),
+            backend: "sdk->pi",
+          });
+        }
+        throw combined;
+      }
+    }
+
     if (cwd) {
       logEvent(cwd, "error", err instanceof Error ? err.message : String(err), {
         provider,

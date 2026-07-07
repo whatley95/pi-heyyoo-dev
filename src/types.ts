@@ -10,7 +10,7 @@ export type {
   SecondaryModelConfig,
   ProviderApiInfo,
 } from "./types/secondary-model.js";
-export type { DocsConfig, WebSearchConfig } from "./types/docs.js";
+export type { DocsConfig, WebSearchConfig, WebSearchProvider } from "./types/docs.js";
 
 export interface HeyyooConfig {
   secondary: import("./types/secondary-model.js").SecondaryModelConfig;
@@ -214,6 +214,8 @@ export interface CallSecondaryModelOptions {
   task?: YooModelTask;
   /** When true, request native structured JSON output if the provider supports it. */
   structuredOutput?: boolean;
+  /** Optional callback invoked with accumulated generated text during SDK streaming. */
+  onStreamProgress?: (text: string) => void;
 }
 
 export interface MemoryEntry {

@@ -73,7 +73,8 @@ pi-heyyoo/
     ├── model-registry.ts # Known secondary model context windows and output limits
     ├── pi-paths.ts       # Resolve Pi agent and project config paths
     ├── logger.ts         # Per-project event/error log
-    ├── yoo-search.ts     # /yoo-search terminal command handler
+    ├── yoo-search.ts          # /yoo-search terminal command handler
+    ├── yoo-search-config.ts   # /yoo-search-config terminal command handler
     ├── yoo-tool-params.ts # Validation for the main yoo tool parameters
     └── types/stubs/      # Ambient declarations for peer dependencies
         ├── pi-peer-deps.d.ts
@@ -95,7 +96,8 @@ pi-heyyoo/
 - **`conventions.ts`** — Static heuristics over the tracked file list plus an LLM pass; stores conventions in `.pi/heyyoo/conventions.json`.
 - **`cost-tracker.ts` / `plan-store.ts` / `review-memory.ts`** — Persistent state under `.pi/heyyoo/`.
 - **`loop-detector.ts`** — Watches recent tool calls and emits a steer message when `yoo.review`/`yoo.judge` repeats without real edits.
-- **`yoo-search.ts`** — Handles the `/yoo-search` terminal command: validates the query, checks `pi-heyyoo.docs.webSearch.enabled`, runs DuckDuckGo search via `doc-fetcher.ts`, and formats raw results.
+- **`yoo-search.ts`** — Handles the `/yoo-search` terminal command: validates the query, checks `pi-heyyoo.docs.webSearch.enabled`, runs web search via `doc-fetcher.ts`, and formats raw results.
+- **`yoo-search-config.ts`** — Handles the `/yoo-search-config` terminal command: lets the user pick DuckDuckGo or Brave Search, and saves the Brave API key to `~/.pi/agent/auth.json` when provided inline.
 - **`yoo-tool-params.ts`** — Validates the main `yoo` tool parameter object, resolves the requested action, and strips/ignores disallowed fields such as the removed `search` parameter.
 
 ---
@@ -207,6 +209,8 @@ Relevant keys:
 - `secondary.authHeader` / `secondary.authPrefix` — optional auth header overrides; used only with `baseUrl`.
 - `secondary.contextWindow` / `secondary.maxOutputTokens` — optional overrides for the current model.
 - `secondary.cacheRetention` / `secondary.transport` / `secondary.maxRetries` / `secondary.maxRetryDelayMs` / `secondary.timeoutMs` — optional SDK backend tuning. Defaults mirror the main Pi agent (`cacheRetention: "short"`, `maxRetries: 3`, `timeoutMs: 300000`).
+- API keys are resolved by pi-heyyoo (`secondary.apiKey` → `~/.pi/agent/auth.json` → env vars → `!command`), then by the `pi-ai` SDK's own credential/env lookup if no explicit key is found.
+- If the SDK backend hits a retryable provider error, pi-heyyoo falls back to the `pi` backend once.
 - `modelInfo` — optional per-model token budget overrides, keyed by model id.
 - `autoJudge` — run `judge` automatically when the last plan step passes review.
 - `preReviewCommands` — shell commands run before each review; output is included in the prompt. Interpreter commands (`node`, `npx`, `python`, `python3`, `ruby`) are restricted to relative script files; inline-evaluation flags (`-c`, `-e`, `--eval`, etc.) are rejected.

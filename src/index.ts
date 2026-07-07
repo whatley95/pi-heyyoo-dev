@@ -31,6 +31,7 @@ import { setSessionId, clearSessionId, pruneSessionDirs } from "./session-scope.
 import { executeYooIndex, formatIndexResult, validateYooIndexParams } from "./yoo-index.js";
 import { executeYooExplain, validateYooExplainParams } from "./yoo-explain.js";
 import { handleYooSearchCommand } from "./yoo-search.js";
+import { handleYooSearchConfigCommand } from "./yoo-search-config.js";
 import { validateYooToolParams, YOO_MODEL_TASKS } from "./yoo-tool-params.js";
 import {
   recordLearnedFact,
@@ -1202,11 +1203,21 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yoo-search", {
-    description: "Search the web via DuckDuckGo: /yoo-search <query>",
+    description: "Search the web: /yoo-search <query>",
     handler: async (args, ctx) => {
       const result = await handleYooSearchCommand(args, ctx);
       const text = result.content[0]?.text ?? "";
       await ctx.ui.select("yoo search", text.split("\n").filter(Boolean));
+    },
+  });
+
+  pi.registerCommand("yoo-search-config", {
+    description:
+      "Configure web search provider. Usage: /yoo-search-config (interactive) or /yoo-search-config brave <api-key>",
+    handler: async (args, ctx) => {
+      const result = await handleYooSearchConfigCommand(args, ctx);
+      const text = result.content[0]?.text ?? "";
+      await ctx.ui.select("yoo search config", text.split("\n").filter(Boolean));
     },
   });
 

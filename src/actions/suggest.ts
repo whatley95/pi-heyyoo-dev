@@ -10,7 +10,13 @@ import {
 } from "../prompts.js";
 import { logEvent } from "../logger.js";
 import { loadDocContext, type DocContextRequest } from "../doc-fetcher.js";
-import { STAGES, secondaryModelLabel, recordCostWithBudget, parseStructuredResult } from "./shared.js";
+import {
+  STAGES,
+  secondaryModelLabel,
+  recordCostWithBudget,
+  parseStructuredResult,
+  createStreamProgressCallback,
+} from "./shared.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult, UsageCost } from "../types.js";
 
@@ -51,6 +57,7 @@ export async function executeYooSuggest(
       sessionManager,
       task: "suggest",
       structuredOutput: true,
+      onStreamProgress: createStreamProgressCallback(progress, 2, STAGES.suggest),
     });
     raw = result.content;
     usage = result.usage;
