@@ -461,6 +461,8 @@ interface PiProcessResult {
   streamThinking: string;
   // Raw stdout chunks for debugging empty responses.
   rawStdout: string[];
+  // Track the last message_update event's message and assistantMessageEvent for fallback.
+  lastAssistantMessageEvent?: Record<string, unknown>;
 }
 
 function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string): void {
@@ -488,21 +490,30 @@ function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string):
     }
   }
 
-  // Accumulate streaming deltas from providers that emit them (Anthropic-style).
-  const delta = event.delta;
-  if (typeof delta === "string") {
-    if (event.type === "thinking_delta") {
-      result.streamThinking += delta;
-    } else if (event.type === "text_delta") {
-      result.streamText += delta;
+  // Extract deltas from top-level streaming events and from nested assistantMessageEvent
+  // inside message_update events. Pi's json mode can emit content in either location.
+  function accumulateDelta(e: Record<string, unknown>): void {
+    const type = e.type;
+    const delta = e.delta;
+    if (typeof delta === "string") {
+      if (type === "thinking_delta") {
+        result.streamThinking += delta;
+      } else if (type === "text_delta") {
+        result.streamText += delta;
+      }
+    }
+    if (type === "text_delta" && typeof e.text === "string") {
+      result.streamText += e.text;
+    }
+    if (type === "thinking_delta" && typeof e.thinking === "string") {
+      result.streamThinking += e.thinking;
     }
   }
-  // Some events carry the delta in a nested text field.
-  if (event.type === "text_delta" && typeof event.text === "string") {
-    result.streamText += event.text;
-  }
-  if (event.type === "thinking_delta" && typeof event.thinking === "string") {
-    result.streamThinking += event.thinking;
+  accumulateDelta(event);
+  const assistantMessageEvent = event.assistantMessageEvent as Record<string, unknown> | undefined;
+  if (assistantMessageEvent) {
+    accumulateDelta(assistantMessageEvent);
+    result.lastAssistantMessageEvent = assistantMessageEvent;
   }
 
   const message = event.message as AssistantMessageLike | undefined;
@@ -536,6 +547,11 @@ function getFinalAssistantText(result: PiProcessResult): string {
   // Fallback to accumulated streaming deltas (for Anthropic-style streaming).
   if (result.streamText.trim().length > 0) return result.streamText.trim();
   if (result.streamThinking.trim().length > 0) return result.streamThinking.trim();
+  // Fallback to the last assistantMessageEvent content block if present.
+  if (result.lastAssistantMessageEvent) {
+    const text = extractTextFromContent(result.lastAssistantMessageEvent.content);
+    if (text.length > 0) return text;
+  }
   return "";
 }
 
