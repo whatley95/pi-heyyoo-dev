@@ -431,15 +431,13 @@ console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content
     let body: Record<string, unknown> = {};
     global.fetch = async (_url, init) => {
       body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          content: [{ type: "text", text: "{}" }],
-          usage: { input_tokens: 10, output_tokens: 5 },
-        }),
-        text: async () => "",
-      } as Response;
+      return new Response(
+        JSON.stringify({ content: [{ type: "text", text: "{}" }], usage: { input_tokens: 10, output_tokens: 5 } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     };
 
     await callSecondaryModel("anthropic", "claude-3-5-sonnet", "system", "user", {
@@ -449,6 +447,39 @@ console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content
     });
 
     assert.equal("response_format" in body, false);
+    assert.equal(body.stream, true);
+  });
+
+  it("streams Anthropic-style SSE responses and accumulates text deltas", async () => {
+    const cwd = makeTempDir("pi-heyyoo-http-anthropic-sse-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "anthropic", id: "claude-3-5-sonnet", backend: "http", apiKey: "sk-test" });
+
+    const sseLines = [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg-1","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"streamed"}}',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" text"}}',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":2}}',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+    ];
+    const sseBody = sseLines.map((line) => `${line}\n\n`).join("");
+
+    global.fetch = async () =>
+      new Response(sseBody, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+
+    const { content, usage } = await callSecondaryModel("anthropic", "claude-3-5-sonnet", "system", "user", {
+      thinking: "off",
+      cwd,
+    });
+
+    assert.equal(content, "streamed text");
+    assert.equal(usage.estimatedInputTokens, 10);
+    assert.equal(usage.estimatedOutputTokens, 2);
   });
 
   it("omits response_format when structuredOutput is false", async () => {

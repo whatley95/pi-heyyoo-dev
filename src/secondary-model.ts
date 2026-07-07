@@ -959,9 +959,7 @@ async function callPiBackend(
       })
       .find(Boolean);
     if (lastError) {
-      throw new Error(
-        `Secondary pi process failed after ${maxRetries + 1} attempts: ${lastError}`,
-      );
+      throw new Error(`Secondary pi process failed after ${maxRetries + 1} attempts: ${lastError}`);
     }
     throw new Error(
       `Secondary pi process produced no assistant text after ${maxRetries + 1} attempts: ${attemptErrors.join(" | ")}`,
@@ -1297,7 +1295,9 @@ async function callOpenAiCompatibleApi(
 
   const headers = buildOpenAiHeaders(apiInfo, apiKey);
   if ((provider === "opencode-go" || provider === "opencode") && sessionId) {
+    // Pi sends both session and client attribution headers for opencode routing/attribution.
     headers["x-opencode-session"] = sessionId;
+    headers["x-opencode-client"] = "pi";
   }
 
   const response = await fetchWithRetry(url, {
@@ -1424,6 +1424,89 @@ function supportsMaxCompletionTokens(provider: string, model: string): boolean {
   return known.has(key) || model.toLowerCase().startsWith("o") || model.toLowerCase().startsWith("gpt-5");
 }
 
+interface AnthropicSseEvent {
+  type: string;
+  delta?: Record<string, unknown>;
+  content_block?: Record<string, unknown>;
+  message?: { usage?: Record<string, unknown> };
+  usage?: Record<string, unknown>;
+}
+
+function parseSseEvents(buffer: string): { events: Array<{ event: string; data: string }>; remainder: string } {
+  const events: Array<{ event: string; data: string }> = [];
+  const separator = "\n\n";
+  const idx = buffer.lastIndexOf(separator);
+  if (idx === -1) {
+    return { events: [], remainder: buffer };
+  }
+  const complete = buffer.slice(0, idx);
+  const remainder = buffer.slice(idx + separator.length);
+  for (const rawEvent of complete.split(separator)) {
+    if (!rawEvent.trim()) continue;
+    let event = "";
+    let data = "";
+    for (const line of rawEvent.split("\n")) {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        if (data) data += "\n";
+        data += line.slice(5).trim();
+      }
+    }
+    if (data || event) {
+      events.push({ event, data });
+    }
+  }
+  return { events, remainder };
+}
+
+async function* readAnthropicSseStream(response: Response, signal?: AbortSignal): AsyncGenerator<AnthropicSseEvent> {
+  if (!response.body) {
+    throw new Error("Anthropic streaming response has no body");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        throw new Error("Secondary model request aborted");
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parsed = parseSseEvents(buffer);
+      buffer = parsed.remainder;
+      for (const sse of parsed.events) {
+        if (sse.event === "error") {
+          throw new Error(sse.data);
+        }
+        if (sse.event === "ping") {
+          continue;
+        }
+        try {
+          yield JSON.parse(sse.data) as AnthropicSseEvent;
+        } catch {
+          // Ignore malformed SSE events; proxies can emit non-JSON lines.
+        }
+      }
+    }
+    // Flush any trailing event that did not end with a blank line.
+    const parsed = parseSseEvents(buffer + decoder.decode());
+    for (const sse of parsed.events) {
+      if (sse.event === "error") throw new Error(sse.data);
+      if (sse.event === "ping") continue;
+      try {
+        yield JSON.parse(sse.data) as AnthropicSseEvent;
+      } catch {
+        // ignore
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function callAnthropicApi(
   provider: string,
   apiInfo: ProviderApiInfo,
@@ -1451,20 +1534,40 @@ async function callAnthropicApi(
     max_tokens: outputTokenLimit,
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
+    // Pi always streams Anthropic messages API requests; some providers (e.g. opencode-go qwen3.7-max)
+    // only serve the streaming path and return 503 for non-streaming requests.
+    stream: true,
   };
   if (thinkingEnabled) {
-    const budget = Math.min(thinkingBudget(thinking ?? "medium"), outputTokenLimit - 512);
-    body.thinking = { type: "enabled", budget_tokens: Math.max(1024, budget) };
+    if (usesAdaptiveThinking(provider, model)) {
+      body.thinking = { type: "adaptive", display: "summarized" };
+      // Adaptive thinking models accept effort via output_config. Cast because SDK types may lag.
+      body.output_config = { effort: anthropicEffortFromThinking(thinking ?? "medium") } as unknown as Record<
+        string,
+        unknown
+      >;
+    } else {
+      const budget = Math.min(thinkingBudget(thinking ?? "medium"), outputTokenLimit - 512);
+      body.thinking = {
+        type: "enabled",
+        budget_tokens: Math.max(1024, budget),
+        display: "summarized",
+      };
+    }
   }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     [apiInfo.authHeader]: `${apiInfo.authPrefix}${apiKey}`,
     "anthropic-version": "2023-06-01",
+    accept: "text/event-stream",
+    // Required by some Anthropic-compatible gateways (including opencode-go) to allow SDK-style access.
+    "anthropic-dangerous-direct-browser-access": "true",
   };
   // Sticky session routing for opencode-go/opencode, matching Pi's behavior.
   if ((provider === "opencode-go" || provider === "opencode") && sessionId) {
     headers["x-opencode-session"] = sessionId;
+    headers["x-opencode-client"] = "pi";
   }
 
   const response = await fetchWithRetry(url, {
@@ -1479,6 +1582,54 @@ async function callAnthropicApi(
     throw new Error(`Secondary model API error (${response.status}): ${text.slice(0, 500)}`);
   }
 
+  const contentType = response.headers.get("content-type") || "";
+  const isStreaming = contentType.includes("text/event-stream") || contentType.includes("application/octet-stream");
+
+  if (isStreaming) {
+    let text = "";
+    let thinkingText = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for await (const event of readAnthropicSseStream(response, signal)) {
+      if (event.type === "content_block_delta") {
+        const delta = event.delta;
+        if (delta?.type === "text_delta" && typeof delta.text === "string") {
+          text += delta.text;
+        } else if (delta?.type === "thinking_delta" && typeof delta.thinking === "string") {
+          thinkingText += delta.thinking;
+        }
+      } else if (event.type === "content_block_start") {
+        const block = event.content_block;
+        if (block?.type === "text" && typeof block.text === "string") {
+          text += block.text;
+        } else if (block?.type === "thinking" && typeof block.thinking === "string") {
+          thinkingText += block.thinking;
+        }
+      } else if (event.type === "message_start") {
+        const usage = event.message?.usage;
+        if (typeof usage?.input_tokens === "number") inputTokens = usage.input_tokens;
+        if (typeof usage?.output_tokens === "number") outputTokens = usage.output_tokens;
+      } else if (event.type === "message_delta") {
+        const usage = event.usage;
+        if (typeof usage?.input_tokens === "number") inputTokens = usage.input_tokens;
+        if (typeof usage?.output_tokens === "number") outputTokens = usage.output_tokens;
+      }
+    }
+    const finalText = text.trim().length > 0 ? text.trim() : thinkingText.trim();
+    if (finalText.length === 0) {
+      throw new Error("Empty response from secondary model stream");
+    }
+    const usage = applyReportedUsage(
+      provider,
+      model,
+      buildUsage(provider, model, systemPrompt, userPrompt, finalText),
+      inputTokens || undefined,
+      outputTokens || undefined,
+    );
+    return { content: finalText, usage };
+  }
+
+  // Non-streaming fallback for proxies that return JSON even when stream: true is requested.
   const data = (await response.json()) as {
     content?: Array<{ type: string; text?: string; thinking?: string }>;
     usage?: { input_tokens?: number; output_tokens?: number };
@@ -1508,10 +1659,10 @@ async function callAnthropicApi(
 }
 
 function modelSupportsAnthropicThinking(provider: string, model: string): boolean {
-  // Anthropic extended thinking is supported by Claude 4 series and later thinking-enabled models.
   const lc = `${provider}:${model}`.toLowerCase();
   const modelLc = model.toLowerCase();
   const thinkingModels = new Set([
+    // Anthropic extended-thinking models.
     "claude-sonnet-4-5",
     "claude-opus-4-5",
     "claude-3-7-sonnet",
@@ -1519,7 +1670,16 @@ function modelSupportsAnthropicThinking(provider: string, model: string): boolea
     "anthropic/claude-3-7-sonnet",
     "anthropic/claude-sonnet-4-5",
     "anthropic/claude-opus-4-5",
+    // opencode-go models that use the Anthropic messages API and support budget-based thinking.
+    "opencode-go:qwen3.7-max",
+    "opencode-go:qwen3.7-plus",
+    "opencode-go:minimax-m3",
+    // opencode Zen Anthropic-messages models with budget-based thinking.
+    "opencode:claude-haiku-4-5",
+    "opencode:claude-opus-4-1",
+    "opencode:claude-opus-4-5",
   ]);
+  if (thinkingModels.has(lc)) return true;
   const baseModel = modelLc.replace(/-\d{8}$/, "").replace(/-latest$/, "");
   if (thinkingModels.has(baseModel)) return true;
   if (lc.startsWith("openrouter:")) {
@@ -1527,6 +1687,26 @@ function modelSupportsAnthropicThinking(provider: string, model: string): boolea
     return [...thinkingModels].some((m) => baseModel.includes(m.replace("anthropic/", "")));
   }
   return false;
+}
+
+function usesAdaptiveThinking(provider: string, model: string): boolean {
+  // Models that require adaptive thinking (type: "adaptive") instead of a token budget.
+  return `${provider}:${model}`.toLowerCase() === "opencode:claude-fable-5";
+}
+
+function anthropicEffortFromThinking(level: string): "low" | "medium" | "high" | "xhigh" {
+  switch (level?.toLowerCase()) {
+    case "minimal":
+    case "low":
+      return "low";
+    case "high":
+    case "xhigh":
+      return "xhigh";
+    case "max":
+      return "xhigh";
+    default:
+      return "medium";
+  }
 }
 
 function supportsReasoningEffort(_provider: string, model: string): boolean {
