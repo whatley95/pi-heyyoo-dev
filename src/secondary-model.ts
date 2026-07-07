@@ -750,15 +750,13 @@ async function callPiBackend(
             messageCount: result.messages.length,
             provider,
             model,
-            contentTypes: debug
-              ? result.messages.map((m) => ({
-                  role: m.role,
-                  types: Array.isArray(m.content)
-                    ? m.content.map((c) => (c && typeof c === "object" ? (c as ContentPart).type : typeof c))
-                    : typeof m.content,
-                }))
-              : undefined,
-            rawStdout: debug ? result.rawStdout.join("").slice(0, 5000) : undefined,
+            contentTypes: result.messages.map((m) => ({
+              role: m.role,
+              types: Array.isArray(m.content)
+                ? m.content.map((c) => (c && typeof c === "object" ? (c as ContentPart).type : typeof c))
+                : typeof m.content,
+            })),
+            rawStdout: result.rawStdout.join("").slice(0, 5000),
           });
         }
       } catch (err) {
