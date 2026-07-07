@@ -188,9 +188,9 @@ declare module "@earendil-works/pi-ai/compat" {
     options?: SimpleStreamOptions,
   ): Promise<AssistantMessage>;
 
-  export function getBuiltinModel(provider: string, modelId: string): Model<Api> | undefined;
-  export function getBuiltinModels(provider: string): Model<Api>[];
-  export function getBuiltinProviders(): string[];
+  export function getModel(provider: string, modelId: string): Model<Api> | undefined;
+  export function getModels(provider: string): Model<Api>[];
+  export function getProviders(): string[];
 }
 
 declare module "@earendil-works/pi-ai/providers/all" {

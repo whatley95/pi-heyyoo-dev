@@ -434,7 +434,7 @@ async function callSdkBackend(
   }
 
   const piAi = await getPiAiCompat();
-  const builtinModel = piAi.getBuiltinModel(provider, model);
+  const builtinModel = piAi.getModel(provider, model);
   if (!builtinModel) {
     throw new Error(
       `Model "${model}" is not in Pi's built-in catalog for provider "${provider}". ` +
@@ -505,7 +505,7 @@ type PiAiCompatModule = typeof import("@earendil-works/pi-ai/compat");
 
 const sdkOverrides: {
   streamSimple?: PiAiCompatModule["streamSimple"];
-  getBuiltinModel?: PiAiCompatModule["getBuiltinModel"];
+  getModel?: PiAiCompatModule["getModel"];
 } = {};
 
 /** Test hook: override the pi-ai streamSimple function used by the sdk backend. */
@@ -513,13 +513,13 @@ export function setSdkStreamSimpleOverride(fn: PiAiCompatModule["streamSimple"] 
   sdkOverrides.streamSimple = fn ?? undefined;
 }
 
-/** Test hook: override getBuiltinModel resolution in the sdk backend. */
-export function setSdkGetBuiltinModelOverride(fn: PiAiCompatModule["getBuiltinModel"] | null): void {
-  sdkOverrides.getBuiltinModel = fn ?? undefined;
+/** Test hook: override getModel resolution in the sdk backend. */
+export function setSdkGetModelOverride(fn: PiAiCompatModule["getModel"] | null): void {
+  sdkOverrides.getModel = fn ?? undefined;
 }
 
 async function getPiAiCompat(): Promise<PiAiCompatModule> {
-  if (sdkOverrides.streamSimple || sdkOverrides.getBuiltinModel) {
+  if (sdkOverrides.streamSimple || sdkOverrides.getModel) {
     // Use overrides to avoid requiring the real package at runtime (e.g., in tests).
     return {
       streamSimple:
@@ -527,10 +527,10 @@ async function getPiAiCompat(): Promise<PiAiCompatModule> {
         (() => {
           throw new Error("@earendil-works/pi-ai/compat streamSimple is not available");
         }),
-      getBuiltinModel:
-        sdkOverrides.getBuiltinModel ??
+      getModel:
+        sdkOverrides.getModel ??
         (() => {
-          throw new Error("@earendil-works/pi-ai/compat getBuiltinModel is not available");
+          throw new Error("@earendil-works/pi-ai/compat getModel is not available");
         }),
     } as PiAiCompatModule;
   }

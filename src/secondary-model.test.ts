@@ -9,7 +9,7 @@ import {
   providerSupportsJsonObject,
   setPiSpawnResolver,
   getProviderApiInfo,
-  setSdkGetBuiltinModelOverride,
+  setSdkGetModelOverride,
   setSdkStreamSimpleOverride,
 } from "./secondary-model.js";
 
@@ -45,7 +45,7 @@ describe("secondary-model backends", () => {
 
   afterEach(() => {
     setPiSpawnResolver(null);
-    setSdkGetBuiltinModelOverride(null);
+    setSdkGetModelOverride(null);
     setSdkStreamSimpleOverride(null);
     global.fetch = originalFetch;
   });
@@ -633,7 +633,7 @@ describe("auto-detect backend", () => {
     const cwd = makeTempDir("yoo-auto-sdk-known-");
     writeSettings(cwd, { provider: "deepseek", id: "deepseek-chat", apiKey: "sk-test" });
     let sdkCalled = false;
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
     setSdkStreamSimpleOverride(() => {
       sdkCalled = true;
       return fakeSdkStream(fakeSdkAssistantMessage("sdk default ok"));
@@ -651,7 +651,7 @@ describe("auto-detect backend", () => {
     const cwd = makeTempDir("yoo-auto-sdk-unknown-");
     writeSettings(cwd, { provider: "some-unknown-provider", id: "x", apiKey: "sk-test" });
     let sdkCalled = false;
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
     setSdkStreamSimpleOverride(() => {
       sdkCalled = true;
       return fakeSdkStream(fakeSdkAssistantMessage("sdk default ok"));
@@ -751,7 +751,7 @@ describe("sdk backend", () => {
   });
 
   afterEach(() => {
-    setSdkGetBuiltinModelOverride(null);
+    setSdkGetModelOverride(null);
     setSdkStreamSimpleOverride(null);
   });
 
@@ -761,7 +761,7 @@ describe("sdk backend", () => {
     writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
 
     let sdkCalled = false;
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId, "anthropic-messages"));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId, "anthropic-messages"));
     setSdkStreamSimpleOverride((_model, context) => {
       sdkCalled = true;
       assert.ok(context.systemPrompt === "system");
@@ -786,7 +786,7 @@ describe("sdk backend", () => {
     tmpDirs.push(cwd);
     writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
 
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
     setSdkStreamSimpleOverride(() =>
       fakeSdkStream(fakeSdkAssistantMessage("hello from sdk", { input: 20, output: 8 })),
     );
@@ -802,7 +802,7 @@ describe("sdk backend", () => {
     tmpDirs.push(cwd);
     writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
 
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
     setSdkStreamSimpleOverride(() =>
       fakeSdkStream({
         ...fakeSdkAssistantMessage("", { input: 0, output: 0 }, "error"),
@@ -846,7 +846,7 @@ describe("sdk backend", () => {
     writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini", backend: "sdk", apiKey: "sk-test" });
 
     let sdkCalled = false;
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
     setSdkStreamSimpleOverride(() => {
       sdkCalled = true;
       return fakeSdkStream(fakeSdkAssistantMessage("sdk explicit ok"));
@@ -862,7 +862,7 @@ describe("sdk backend", () => {
     tmpDirs.push(cwd);
     writeSettings(cwd, { provider: "opencode-go", id: "unknown-model", apiKey: "opencode-test" });
 
-    setSdkGetBuiltinModelOverride(() => undefined);
+    setSdkGetModelOverride(() => undefined);
 
     await assert.rejects(
       () => callSecondaryModel("opencode-go", "unknown-model", "system", "user", { cwd }),
@@ -875,7 +875,7 @@ describe("sdk backend", () => {
     tmpDirs.push(cwd);
     writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
 
-    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
     let receivedOptions: SimpleStreamOptions | undefined;
     setSdkStreamSimpleOverride((_model, _context, options) => {
       receivedOptions = options;
