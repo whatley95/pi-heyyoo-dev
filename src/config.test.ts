@@ -81,6 +81,15 @@ describe("resolveTaskModel", () => {
     assert.equal(result.provider, "openai");
   });
 
+  it("preserves sdk backend override", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { review: { backend: "sdk" } },
+    };
+    const result = resolveTaskModel(config, "review");
+    assert.equal(result.backend, "sdk");
+  });
+
   it("ignores non-finite numeric overrides", () => {
     const config: HeyyooConfig = {
       ...baseConfig,

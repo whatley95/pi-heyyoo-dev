@@ -9,8 +9,8 @@ export interface SecondaryModelConfig {
   thinking?: string;
   contextWindow?: number;
   maxOutputTokens?: number;
-  /** Backend to use for secondary model calls. "pi" spawns the pi CLI; "http" uses direct provider HTTP. */
-  backend?: "pi" | "http";
+  /** Backend to use for secondary model calls. "pi" spawns the pi CLI; "http" uses direct provider HTTP; "sdk" uses Pi's pi-ai provider layer. */
+  backend?: "pi" | "http" | "sdk";
   /** Custom base URL for any OpenAI-compatible or Anthropic-compatible provider. */
   baseUrl?: string;
   /** Inline API key. Prefer auth.json or env vars; this is a fallback. */

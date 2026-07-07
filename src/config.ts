@@ -6,8 +6,8 @@ import type { HeyyooConfig, SecondaryModelConfig, YooModelTask } from "./types.j
 
 export { getAgentDir, getProjectConfigPath } from "./pi-paths.js";
 
-function isValidBackend(value: unknown): value is "pi" | "http" {
-  return value === "pi" || value === "http";
+function isValidBackend(value: unknown): value is "pi" | "http" | "sdk" {
+  return value === "pi" || value === "http" || value === "sdk";
 }
 
 function pickOptionalString(value: unknown, fallback: string | undefined): string | undefined {

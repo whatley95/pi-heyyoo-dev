@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { resolveApiKey } from "./auth-reader.js";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
 import { formatCost, getSessionCost, getReservedCost } from "./cost-tracker.js";
@@ -14,8 +15,9 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
   // Their models have complex compat requirements (per-model API styles, 8+
   // thinking formats, max_completion_tokens vs max_tokens, reasoning_effort
   // mapping) that pi-heyyoo cannot replicate without duplicating Pi's entire
-  // openai-completions compat layer. They fall back to the pi process which
-  // handles all compat correctly.
+  // openai-completions compat layer. They default to the sdk backend which uses
+  // Pi's pi-ai provider layer directly; users can still force the pi process via
+  // backend: "pi".
   anthropic: {
     style: "anthropic",
     baseUrl: "https://api.anthropic.com/v1",
@@ -200,55 +202,11 @@ const PROVIDER_API_MAP: Record<string, ProviderApiInfo> = {
 // Per-model API style overrides for providers that have mixed API styles.
 // Key format: "provider:model". When present, this overrides the provider-level
 // entry in PROVIDER_API_MAP for that specific model.
-// Note: opencode-go/opencode are NOT in the HTTP map by default because most of
-// their models have complex compat requirements beyond simple
-// openai-compatible/anthropic API styles. However, specific models that use the
-// Anthropic messages API are routed directly via HTTP to avoid the pi backend
-// overhead and transient 503 errors from the provider's inference layer.
-const MODEL_API_OVERRIDES: Record<string, ProviderApiInfo> = {
-  // opencode-go models that use anthropic-messages API.
-  // Note: qwen3.7-max/qwen3.7-plus are intentionally NOT routed via HTTP by
-  // default. The opencode-go Anthropic endpoint currently returns 503
-  // "Inference is temporarily unavailable" for these models; falling back to
-  // the pi backend (which uses Pi's full Anthropic compat layer) works.
-  // Users can still force HTTP with `backend: "http"` in settings.
-  "opencode-go:minimax-m3": {
-    style: "anthropic",
-    baseUrl: "https://opencode.ai/zen/go/v1",
-    authHeader: "x-api-key",
-    authPrefix: "",
-    supportsJsonObject: false,
-  },
-  // opencode models that use anthropic-messages API.
-  "opencode:claude-fable-5": {
-    style: "anthropic",
-    baseUrl: "https://opencode.ai/zen/v1",
-    authHeader: "x-api-key",
-    authPrefix: "",
-    supportsJsonObject: false,
-  },
-  "opencode:claude-haiku-4-5": {
-    style: "anthropic",
-    baseUrl: "https://opencode.ai/zen/v1",
-    authHeader: "x-api-key",
-    authPrefix: "",
-    supportsJsonObject: false,
-  },
-  "opencode:claude-opus-4-1": {
-    style: "anthropic",
-    baseUrl: "https://opencode.ai/zen/v1",
-    authHeader: "x-api-key",
-    authPrefix: "",
-    supportsJsonObject: false,
-  },
-  "opencode:claude-opus-4-5": {
-    style: "anthropic",
-    baseUrl: "https://opencode.ai/zen/v1",
-    authHeader: "x-api-key",
-    authPrefix: "",
-    supportsJsonObject: false,
-  },
-};
+// Note: all providers now default to the SDK backend. Pi's provider layer gives
+// better cache management and handles new-model compat automatically. The direct
+// HTTP map is still used when backend: "http" is set or a custom baseUrl is
+// configured. Users can still force the pi process via `backend: "pi"`.
+const MODEL_API_OVERRIDES: Record<string, ProviderApiInfo> = {};
 
 export function getProviderApiInfo(provider: string, model?: string): ProviderApiInfo | undefined {
   const p = provider.toLowerCase();
@@ -315,14 +273,12 @@ export async function callSecondaryModel(
   provider = (effectiveSecondary?.provider || provider).toLowerCase();
   model = effectiveSecondary?.id || model;
   const thinking = optionsThinking ?? effectiveSecondary?.thinking;
-  // Auto-detect backend: use direct HTTP for known providers, per-model overrides,
-  // or custom baseUrl. Fall back to pi process for providers that need Pi's
-  // routing/auth layer.
-  const knownProvider =
-    Object.hasOwn(PROVIDER_API_MAP, provider) ||
-    Boolean(getProviderApiInfo(provider, model)) ||
-    Boolean(effectiveSecondary?.baseUrl);
-  const backend = effectiveSecondary?.backend ?? (knownProvider ? "http" : "pi");
+  // Auto-detect backend: default to the SDK backend so Pi's provider layer handles
+  // cache management and new-model compat automatically. Explicit backend configs
+  // take precedence. A custom baseUrl still routes through direct HTTP. The pi
+  // process backend is only used when explicitly requested via backend: "pi".
+  const useSdk = shouldUseSdkBackend(provider, effectiveSecondary);
+  const backend = effectiveSecondary?.backend ?? (effectiveSecondary?.baseUrl ? "http" : useSdk ? "sdk" : "pi");
 
   const modelInfoOverride = buildModelInfoOverride(effectiveSecondary, config?.modelInfo, model);
   const thinkingEnabledForBudget = Boolean(thinking) && thinking?.toLowerCase() !== "off";
@@ -352,6 +308,17 @@ export async function callSecondaryModel(
         cwd,
         sessionManager,
         relevantPaths,
+      });
+    }
+
+    if (backend === "sdk") {
+      return await callSdkBackend(provider, model, systemPrompt, userPrompt, {
+        signal,
+        thinking,
+        cwd,
+        sessionManager,
+        secondary: effectiveSecondary,
+        modelInfoOverride,
       });
     }
 
@@ -437,6 +404,94 @@ function buildModelInfoOverride(
   return Object.keys(override).length > 0 ? override : undefined;
 }
 
+function shouldUseSdkBackend(_provider: string, secondary?: SecondaryModelConfig): boolean {
+  if (secondary?.backend === "sdk") return true;
+  if (secondary?.backend) return false;
+  // Default every provider to the SDK backend. Pi's provider layer gives better
+  // cache management and handles new models automatically; users can opt out via
+  // backend: "http"/backend: "pi" or force direct HTTP via baseUrl.
+  return true;
+}
+
+async function callSdkBackend(
+  provider: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  options: CallSecondaryModelOptions & {
+    secondary?: SecondaryModelConfig;
+    modelInfoOverride?: Partial<import("./model-registry.js").ModelInfo>;
+  },
+): Promise<{ content: string; usage: UsageCost }> {
+  const { signal, thinking, cwd, secondary, modelInfoOverride } = options;
+
+  const apiKey = resolveApiKey(provider, secondary?.apiKey);
+  if (!apiKey) {
+    throw new Error(
+      `No API key found for provider "${provider}". Set the appropriate environment variable, configure auth.json, ` +
+        `or set pi-heyyoo.secondary.apiKey.`,
+    );
+  }
+
+  const piAi = await getPiAiCompat();
+  const builtinModel = piAi.getBuiltinModel(provider, model);
+  if (!builtinModel) {
+    throw new Error(
+      `Model "${model}" is not in Pi's built-in catalog for provider "${provider}". ` +
+        `Use backend: "pi" to call it through the Pi CLI, or configure a custom baseUrl with backend: "http".`,
+    );
+  }
+
+  const context: Context = {
+    systemPrompt,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: userPrompt }],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+
+  const sdkOptions: SimpleStreamOptions = {
+    apiKey,
+    signal,
+    sessionId: cwd ? piSessionIds.get(cwd) : undefined,
+  };
+
+  if (thinking && thinking.toLowerCase() !== "off") {
+    sdkOptions.reasoning = thinking as import("@earendil-works/pi-ai").ThinkingLevel;
+  }
+
+  const modelInfo = resolveModelInfo(provider, model, modelInfoOverride);
+  const thinkingEnabledForBudget = Boolean(thinking) && thinking?.toLowerCase() !== "off";
+  sdkOptions.maxTokens = thinkingEnabledForBudget
+    ? modelInfo.maxOutputTokens
+    : Math.min(modelInfo.maxOutputTokens, 2048);
+
+  const stream = piAi.streamSimple(builtinModel, context, sdkOptions);
+  const message = await stream.result();
+
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    const detail = message.errorMessage ? `: ${message.errorMessage}` : "";
+    throw new Error(`Secondary model request failed (${message.stopReason})${detail}`);
+  }
+
+  const content = extractTextFromContent(message.content);
+  if (!content) {
+    throw new Error(`Secondary model returned no extractable text (stopReason: ${message.stopReason ?? "unknown"})`);
+  }
+
+  const usage = buildUsage(provider, model, systemPrompt, userPrompt, content);
+  if (message.usage) {
+    return {
+      content,
+      usage: applyReportedUsage(provider, model, usage, message.usage.input, message.usage.output),
+    };
+  }
+  return { content, usage };
+}
+
 const SIGKILL_TIMEOUT_MS = 5000;
 
 let testPiSpawnResolver: (() => { command: string; prefixArgs: string[] }) | null = null;
@@ -444,6 +499,42 @@ let testPiSpawnResolver: (() => { command: string; prefixArgs: string[] }) | nul
 /** Test hook: override the Pi binary used by the pi backend. */
 export function setPiSpawnResolver(resolver: (() => { command: string; prefixArgs: string[] }) | null): void {
   testPiSpawnResolver = resolver;
+}
+
+type PiAiCompatModule = typeof import("@earendil-works/pi-ai/compat");
+
+const sdkOverrides: {
+  streamSimple?: PiAiCompatModule["streamSimple"];
+  getBuiltinModel?: PiAiCompatModule["getBuiltinModel"];
+} = {};
+
+/** Test hook: override the pi-ai streamSimple function used by the sdk backend. */
+export function setSdkStreamSimpleOverride(fn: PiAiCompatModule["streamSimple"] | null): void {
+  sdkOverrides.streamSimple = fn ?? undefined;
+}
+
+/** Test hook: override getBuiltinModel resolution in the sdk backend. */
+export function setSdkGetBuiltinModelOverride(fn: PiAiCompatModule["getBuiltinModel"] | null): void {
+  sdkOverrides.getBuiltinModel = fn ?? undefined;
+}
+
+async function getPiAiCompat(): Promise<PiAiCompatModule> {
+  if (sdkOverrides.streamSimple || sdkOverrides.getBuiltinModel) {
+    // Use overrides to avoid requiring the real package at runtime (e.g., in tests).
+    return {
+      streamSimple:
+        sdkOverrides.streamSimple ??
+        (() => {
+          throw new Error("@earendil-works/pi-ai/compat streamSimple is not available");
+        }),
+      getBuiltinModel:
+        sdkOverrides.getBuiltinModel ??
+        (() => {
+          throw new Error("@earendil-works/pi-ai/compat getBuiltinModel is not available");
+        }),
+    } as PiAiCompatModule;
+  }
+  return import("@earendil-works/pi-ai/compat");
 }
 
 function resolvePiSpawn(): { command: string; prefixArgs: string[] } {

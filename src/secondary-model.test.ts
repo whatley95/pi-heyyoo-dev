@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Api, AssistantMessage, Model, SimpleStreamOptions, Usage } from "@earendil-works/pi-ai";
 import {
   callSecondaryModel,
   providerSupportsJsonObject,
   setPiSpawnResolver,
   getProviderApiInfo,
+  setSdkGetBuiltinModelOverride,
+  setSdkStreamSimpleOverride,
 } from "./secondary-model.js";
 
 function makeTempDir(prefix: string): string {
@@ -42,10 +45,12 @@ describe("secondary-model backends", () => {
 
   afterEach(() => {
     setPiSpawnResolver(null);
+    setSdkGetBuiltinModelOverride(null);
+    setSdkStreamSimpleOverride(null);
     global.fetch = originalFetch;
   });
 
-  it("defaults to pi backend when no backend is configured", async () => {
+  it("uses pi backend when backend: pi is configured", async () => {
     const cwd = makeTempDir("pi-heyyoo-pi-default-");
     tmpDirs.push(cwd);
     writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini", backend: "pi" });
@@ -608,14 +613,13 @@ describe("PROVIDER_API_MAP coverage", () => {
 });
 
 describe("per-model API overrides", () => {
-  it("opencode-go anthropic-messages models use HTTP, others use pi backend", () => {
+  it("opencode-go/opencode models are excluded from direct HTTP API map", () => {
     assert.equal(getProviderApiInfo("opencode-go", "kimi-k2.7-code"), undefined);
     assert.equal(getProviderApiInfo("opencode-go", "deepseek-v4-pro"), undefined);
     assert.equal(getProviderApiInfo("opencode-go", "qwen3.7-max"), undefined);
+    assert.equal(getProviderApiInfo("opencode-go", "minimax-m3"), undefined);
+    assert.equal(getProviderApiInfo("opencode", "claude-opus-4-5"), undefined);
     assert.equal(getProviderApiInfo("opencode"), undefined);
-    const minimax = getProviderApiInfo("opencode-go", "minimax-m3");
-    assert.equal(minimax?.style, "anthropic");
-    assert.ok(minimax?.baseUrl.includes("opencode.ai"));
   });
 });
 
@@ -625,40 +629,38 @@ describe("auto-detect backend", () => {
     global.fetch = originalFetch;
   });
 
-  it("uses http backend for known provider without explicit backend config", async () => {
-    const cwd = makeTempDir("yoo-auto-http-");
+  it("defaults to sdk backend for known provider without explicit backend config", async () => {
+    const cwd = makeTempDir("yoo-auto-sdk-known-");
     writeSettings(cwd, { provider: "deepseek", id: "deepseek-chat", apiKey: "sk-test" });
-    let fetchCalled = false;
-    global.fetch = (async () => {
-      fetchCalled = true;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+    let sdkCalled = false;
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      sdkCalled = true;
+      return fakeSdkStream(fakeSdkAssistantMessage("sdk default ok"));
+    });
     try {
-      await callSecondaryModel("deepseek", "deepseek-chat", "sys", "usr", { cwd });
-      assert.ok(fetchCalled, "Should have used direct HTTP fetch for known provider");
+      const { content } = await callSecondaryModel("deepseek", "deepseek-chat", "sys", "usr", { cwd });
+      assert.equal(content, "sdk default ok");
+      assert.ok(sdkCalled, "Should have used SDK backend for known provider");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  it("uses pi backend for unknown provider without explicit backend config", async () => {
-    const cwd = makeTempDir("yoo-auto-pi-");
-    writeSettings(cwd, { provider: "some-unknown-provider", id: "x" });
-    const script = join(cwd, "fake-pi-auto.js");
-    writeFileSync(
-      script,
-      `console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"ok"}],usage:{input:1,output:1,cost:0}}}));`,
-      "utf-8",
-    );
-    setPiSpawnResolver(() => ({ command: process.execPath, prefixArgs: [script] }));
+  it("defaults to sdk backend for unknown provider without explicit backend config", async () => {
+    const cwd = makeTempDir("yoo-auto-sdk-unknown-");
+    writeSettings(cwd, { provider: "some-unknown-provider", id: "x", apiKey: "sk-test" });
+    let sdkCalled = false;
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      sdkCalled = true;
+      return fakeSdkStream(fakeSdkAssistantMessage("sdk default ok"));
+    });
     try {
-      const result = await callSecondaryModel("some-unknown-provider", "x", "sys", "usr", { thinking: "off", cwd });
-      assert.equal(result.content, "ok", "Should have used pi backend for unknown provider");
+      const { content } = await callSecondaryModel("some-unknown-provider", "x", "sys", "usr", { cwd });
+      assert.equal(content, "sdk default ok");
+      assert.ok(sdkCalled, "Should have used SDK backend for unknown provider");
     } finally {
-      setPiSpawnResolver(null);
       rmSync(cwd, { recursive: true, force: true });
     }
   });
@@ -685,5 +687,202 @@ describe("auto-detect backend", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+function fakeSdkModel(provider: string, modelId: string, api: string = "openai-completions"): Model<Api> {
+  return {
+    id: modelId,
+    name: modelId,
+    api,
+    provider,
+    baseUrl: "https://example.com",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
+    contextWindow: 128000,
+    maxTokens: 4096,
+  } as Model<Api>;
+}
+
+function fakeSdkAssistantMessage(text: string, usage?: Partial<Usage>, stopReason = "stop"): AssistantMessage {
+  const inputTokens = usage?.input ?? 10;
+  const outputTokens = usage?.output ?? 5;
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: "openai-completions",
+    provider: "opencode-go",
+    model: "qwen3.7-max",
+    usage: {
+      input: inputTokens,
+      output: outputTokens,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: inputTokens + outputTokens,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: Date.now(),
+  } as AssistantMessage;
+}
+
+function fakeSdkStream(message: AssistantMessage): import("@earendil-works/pi-ai").AssistantMessageEventStream {
+  return {
+    result: async () => message,
+    [Symbol.asyncIterator]: async function* () {
+      yield { type: "done", reason: "stop", message };
+    },
+  } as unknown as import("@earendil-works/pi-ai").AssistantMessageEventStream;
+}
+
+describe("sdk backend", () => {
+  let tmpDirs: string[] = [];
+
+  after(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  afterEach(() => {
+    setSdkGetBuiltinModelOverride(null);
+    setSdkStreamSimpleOverride(null);
+  });
+
+  it("opencode-go defaults to sdk backend", async () => {
+    const cwd = makeTempDir("yoo-sdk-default-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let sdkCalled = false;
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId, "anthropic-messages"));
+    setSdkStreamSimpleOverride((_model, context) => {
+      sdkCalled = true;
+      assert.ok(context.systemPrompt === "system");
+      const userMsg = context.messages.find((m) => m.role === "user");
+      assert.ok(userMsg);
+      const textParts = Array.isArray(userMsg.content)
+        ? userMsg.content.filter((c) => typeof c === "object" && c !== null && "text" in c)
+        : [];
+      assert.ok(textParts.some((c) => (c as { text: string }).text === "user"));
+      return fakeSdkStream(fakeSdkAssistantMessage("sdk backend ok", { input: 10, output: 5 }));
+    });
+
+    const { content, usage } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(content, "sdk backend ok");
+    assert.ok(sdkCalled);
+    assert.equal(usage.estimatedInputTokens, 10);
+    assert.equal(usage.estimatedOutputTokens, 5);
+  });
+
+  it("sdk backend returns text and usage", async () => {
+    const cwd = makeTempDir("yoo-sdk-usage-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() =>
+      fakeSdkStream(fakeSdkAssistantMessage("hello from sdk", { input: 20, output: 8 })),
+    );
+
+    const { content, usage } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(content, "hello from sdk");
+    assert.equal(usage.estimatedInputTokens, 20);
+    assert.equal(usage.estimatedOutputTokens, 8);
+  });
+
+  it("sdk backend throws with clear message on stopReason error", async () => {
+    const cwd = makeTempDir("yoo-sdk-error-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() =>
+      fakeSdkStream({
+        ...fakeSdkAssistantMessage("", { input: 0, output: 0 }, "error"),
+        errorMessage: "Inference is temporarily unavailable",
+      } as AssistantMessage),
+    );
+
+    await assert.rejects(
+      () => callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd }),
+      /Inference is temporarily unavailable/,
+    );
+  });
+
+  it("backend: pi overrides sdk default for opencode-go", async () => {
+    const cwd = makeTempDir("yoo-sdk-pi-override-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", backend: "pi", apiKey: "opencode-test" });
+
+    let sdkCalled = false;
+    setSdkStreamSimpleOverride(() => {
+      sdkCalled = true;
+      return fakeSdkStream(fakeSdkAssistantMessage("should not happen"));
+    });
+
+    const script = join(cwd, "fake-pi-override.js");
+    writeFileSync(
+      script,
+      `console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"pi backend ok"}],usage:{input:10,output:5,cost:0.0001}}}));`,
+      "utf-8",
+    );
+    setPiSpawnResolver(() => ({ command: process.execPath, prefixArgs: [script] }));
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(content, "pi backend ok");
+    assert.equal(sdkCalled, false);
+  });
+
+  it("backend: sdk works for non-opencode provider", async () => {
+    const cwd = makeTempDir("yoo-sdk-explicit-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini", backend: "sdk", apiKey: "sk-test" });
+
+    let sdkCalled = false;
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      sdkCalled = true;
+      return fakeSdkStream(fakeSdkAssistantMessage("sdk explicit ok"));
+    });
+
+    const { content } = await callSecondaryModel("openai", "gpt-4o-mini", "system", "user", { cwd });
+    assert.equal(content, "sdk explicit ok");
+    assert.ok(sdkCalled);
+  });
+
+  it("sdk backend throws when model is not in Pi catalog", async () => {
+    const cwd = makeTempDir("yoo-sdk-no-catalog-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "unknown-model", apiKey: "opencode-test" });
+
+    setSdkGetBuiltinModelOverride(() => undefined);
+
+    await assert.rejects(
+      () => callSecondaryModel("opencode-go", "unknown-model", "system", "user", { cwd }),
+      /not in Pi's built-in catalog/,
+    );
+  });
+
+  it("sdk backend passes reasoning option when thinking is enabled", async () => {
+    const cwd = makeTempDir("yoo-sdk-reasoning-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetBuiltinModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    let receivedOptions: SimpleStreamOptions | undefined;
+    setSdkStreamSimpleOverride((_model, _context, options) => {
+      receivedOptions = options;
+      return fakeSdkStream(fakeSdkAssistantMessage("ok"));
+    });
+
+    await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd, thinking: "high" });
+    assert.equal(receivedOptions?.reasoning, "high");
   });
 });

@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "./pi-paths.js";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
-import { callSecondaryModel, setPiSessionId, clearPiSessionId, getProviderApiInfo } from "./secondary-model.js";
+import { callSecondaryModel, setPiSessionId, clearPiSessionId } from "./secondary-model.js";
 import { getVcsInfo } from "./diff-grabber.js";
 
 const { version: VERSION, homepage: HOMEPAGE = "https://whatley.xyz" } = JSON.parse(
@@ -1425,12 +1425,12 @@ export default function (pi: ExtensionAPI) {
         if (config.secondary.provider && config.secondary.id) {
           tests.push({ model: config.secondary, label: secondaryModelLabel(config.secondary) });
         }
-        const defaultKey = `${config.secondary.provider}:${config.secondary.id}:${config.secondary.backend ?? "pi"}:${config.secondary.baseUrl ?? ""}`;
+        const defaultKey = `${config.secondary.provider}:${config.secondary.id}:${config.secondary.backend ?? "sdk"}:${config.secondary.baseUrl ?? ""}`;
         for (const action of YOO_MODEL_TASKS) {
           const override = config.taskModels?.[action];
           if (!override?.provider && !override?.id) continue;
           const model = resolveTaskModel(config, action);
-          const key = `${model.provider}:${model.id}:${model.backend ?? "pi"}:${model.baseUrl ?? ""}`;
+          const key = `${model.provider}:${model.id}:${model.backend ?? "sdk"}:${model.baseUrl ?? ""}`;
           if (key === defaultKey) continue;
           tests.push({ task: action, model, label: secondaryModelLabel(model) });
         }
@@ -1476,9 +1476,9 @@ export default function (pi: ExtensionAPI) {
 
       const formatModelDetails = (model: TestResult) => {
         const parts: string[] = [];
-        // Determine actual backend: explicit config wins, otherwise auto-detect
-        const knownProvider = getProviderApiInfo(model.provider, model.id) !== undefined || Boolean(model.baseUrl);
-        const actualBackend = model.backend ?? (knownProvider ? "http" : "pi");
+        // Determine actual backend: explicit config wins, custom endpoint uses HTTP,
+        // otherwise the SDK backend is the universal default.
+        const actualBackend = model.backend ?? (model.baseUrl ? "http" : "sdk");
         parts.push(`backend: ${actualBackend}`);
         if (model.thinking) parts.push(`thinking: ${model.thinking}`);
         else parts.push("thinking: off");
@@ -1694,13 +1694,20 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yoo-backend", {
-    description: "Switch secondary model backend between pi (default) and http (legacy)",
+    description: "Switch secondary model backend: sdk (default), pi, or http",
     handler: async (args, ctx) => {
       const config = loadHeyyooConfig(ctx.cwd);
-      const current = config.secondary.backend ?? "pi";
+      const VALID_BACKENDS = ["sdk", "pi", "http"] as const;
+      type Backend = (typeof VALID_BACKENDS)[number];
+      const current = config.secondary.backend ?? "sdk";
       const requested = args.trim().toLowerCase();
-      const next: "pi" | "http" =
-        requested === "pi" ? "pi" : requested === "http" ? "http" : current === "pi" ? "http" : "pi";
+      let next: Backend;
+      if (VALID_BACKENDS.includes(requested as Backend)) {
+        next = requested as Backend;
+      } else {
+        const idx = VALID_BACKENDS.indexOf(current as Backend);
+        next = VALID_BACKENDS[(idx + 1) % VALID_BACKENDS.length];
+      }
 
       const settingsPath = join(getAgentDir(), "settings.json");
       let settings: Record<string, unknown> = {};
@@ -1758,7 +1765,7 @@ async function showYooStatus(ctx: ExtensionContext): Promise<void> {
     config.secondary.provider && config.secondary.id
       ? `  Base model: ${modelStatusLine(config.secondary)}`
       : "  Base model: not configured",
-    `  Backend: ${config.secondary.backend ?? "pi"}`,
+    `  Backend: ${config.secondary.backend ?? "sdk"}`,
     `  Auto-judge: ${config.autoJudge ? "enabled" : "disabled"}`,
     config.preReviewCommands && config.preReviewCommands.length > 0
       ? `  Pre-review commands: ${config.preReviewCommands.join(", ")}`
