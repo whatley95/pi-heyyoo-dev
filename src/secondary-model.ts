@@ -459,6 +459,8 @@ interface PiProcessResult {
   // where the final message_end event may not include the full content array.
   streamText: string;
   streamThinking: string;
+  // Raw stdout chunks for debugging empty responses.
+  rawStdout: string[];
 }
 
 function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string): void {
@@ -756,6 +758,7 @@ async function callPiBackend(
                     : typeof m.content,
                 }))
               : undefined,
+            rawStdout: debug ? result.rawStdout.join("").slice(0, 5000) : undefined,
           });
         }
       } catch (err) {
@@ -817,6 +820,7 @@ function runPiProcess(
     cost: 0,
     streamText: "",
     streamThinking: "",
+    rawStdout: [],
   };
 
   return new Promise((resolve, reject) => {
@@ -890,8 +894,12 @@ function runPiProcess(
       }
     };
 
+    const rawStdout: string[] = [];
+
     const onStdoutData = (chunk: Buffer) => {
-      buffer += chunk.toString();
+      const text = chunk.toString();
+      rawStdout.push(text);
+      buffer += text;
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || "";
       for (const line of lines) processPiJsonLine(line, result, cwd);
