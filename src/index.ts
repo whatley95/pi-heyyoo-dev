@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "./pi-paths.js";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
-import { callSecondaryModel, setPiSessionId, clearPiSessionId } from "./secondary-model.js";
+import { callSecondaryModel, setPiSessionId, clearPiSessionId, getProviderApiInfo } from "./secondary-model.js";
 import { getVcsInfo } from "./diff-grabber.js";
 
 const { version: VERSION, homepage: HOMEPAGE = "https://whatley.xyz" } = JSON.parse(
@@ -1476,7 +1476,10 @@ export default function (pi: ExtensionAPI) {
 
       const formatModelDetails = (model: TestResult) => {
         const parts: string[] = [];
-        if (model.backend && model.backend !== "pi") parts.push(`backend: ${model.backend}`);
+        // Determine actual backend: explicit config wins, otherwise auto-detect
+        const knownProvider = getProviderApiInfo(model.provider, model.id) !== undefined || Boolean(model.baseUrl);
+        const actualBackend = model.backend ?? (knownProvider ? "http" : "pi");
+        parts.push(`backend: ${actualBackend}`);
         if (model.thinking) parts.push(`thinking: ${model.thinking}`);
         else parts.push("thinking: off");
         if (model.baseUrl) parts.push(`endpoint: ${model.baseUrl}`);
