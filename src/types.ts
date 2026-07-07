@@ -43,6 +43,8 @@ export interface HeyyooConfig {
   deepScan?: boolean | number;
   /** Per-model token-budget overrides. Key is the model id (e.g. "qwen3.7-max"). */
   modelInfo?: Record<string, { contextWindow?: number; maxOutputTokens?: number }>;
+  /** Timeout in ms for child pi process calls (default 300000 = 5 min). */
+  processTimeoutMs?: number;
 }
 
 export interface PlanStep {

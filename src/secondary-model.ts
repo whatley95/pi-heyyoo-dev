@@ -482,6 +482,9 @@ async function callPiBackend(
 ): Promise<{ content: string; usage: UsageCost }> {
   const { signal, thinking, cwd, sessionManager, relevantPaths } = options;
 
+  const config = cwd ? loadHeyyooConfig(cwd) : undefined;
+  const processTimeoutMs = config?.processTimeoutMs ?? PI_PROCESS_TIMEOUT_MS;
+
   const inheritedSession = buildInheritedSessionJsonl(sessionManager, relevantPaths);
   if (cwd) {
     const inheritedLines = inheritedSession ? inheritedSession.split("\n").filter(Boolean) : [];
@@ -527,22 +530,59 @@ async function callPiBackend(
   ];
 
   try {
-    const result = await runPiProcess(command, [...prefixArgs, ...args], cwd, signal);
-    const content = getFinalAssistantText(result.messages);
-    if (!content) {
-      const stderrPreview = result.stderr.trim().slice(0, 500);
-      throw new Error(`Secondary pi process produced no assistant text${stderrPreview ? `: ${stderrPreview}` : ""}`);
+    const maxRetries = 2;
+    const attemptErrors: string[] = [];
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await runPiProcess(command, [...prefixArgs, ...args], cwd, signal, processTimeoutMs);
+        const content = getFinalAssistantText(result.messages);
+        if (content) {
+          const estimatedInputTokens = result.inputTokens ?? estimateTokens(systemPrompt + userPrompt);
+          const estimatedOutputTokens = result.outputTokens ?? estimateTokens(content);
+          const usage: UsageCost = {
+            estimatedInputTokens,
+            estimatedOutputTokens,
+            estimatedCostUsd: result.cost ?? estimateCost(provider, model, estimatedInputTokens, estimatedOutputTokens),
+            sessionCostUsd: 0,
+          };
+          return { content, usage };
+        }
+        // No assistant text — collect diagnostics and retry.
+        const stderrPreview = result.stderr.trim().slice(0, 500);
+        const diag = `messages=${result.messages.length}, stderr=${stderrPreview || "(empty)"}`;
+        attemptErrors.push(`attempt ${attempt + 1}: ${diag}`);
+        if (cwd) {
+          logEvent(cwd, "warn", "Pi backend produced no assistant text, retrying", {
+            attempt: attempt + 1,
+            maxRetries: maxRetries + 1,
+            messageCount: result.messages.length,
+            provider,
+            model,
+          });
+        }
+      } catch (err) {
+        // Process-level errors (spawn failure, abort, non-zero exit) — retry transient ones.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (signal?.aborted || /aborted/i.test(msg)) throw err; // don't retry aborts
+        attemptErrors.push(`attempt ${attempt + 1}: ${msg}`);
+        if (cwd) {
+          logEvent(cwd, "warn", "Pi backend error, retrying", {
+            attempt: attempt + 1,
+            maxRetries: maxRetries + 1,
+            error: msg,
+            provider,
+            model,
+          });
+        }
+      }
+      if (attempt < maxRetries) {
+        const delay = 500 * 2 ** attempt; // 500ms, 1s
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
-
-    const estimatedInputTokens = result.inputTokens ?? estimateTokens(systemPrompt + userPrompt);
-    const estimatedOutputTokens = result.outputTokens ?? estimateTokens(content);
-    const usage: UsageCost = {
-      estimatedInputTokens,
-      estimatedOutputTokens,
-      estimatedCostUsd: result.cost ?? estimateCost(provider, model, estimatedInputTokens, estimatedOutputTokens),
-      sessionCostUsd: 0,
-    };
-    return { content, usage };
+    throw new Error(
+      `Secondary pi process produced no assistant text after ${maxRetries + 1} attempts: ${attemptErrors.join(" | ")}`,
+    );
   } finally {
     try {
       rmSync(tmp.dir, { recursive: true, force: true });
@@ -552,7 +592,15 @@ async function callPiBackend(
   }
 }
 
-function runPiProcess(command: string, args: string[], cwd?: string, signal?: AbortSignal): Promise<PiProcessResult> {
+const PI_PROCESS_TIMEOUT_MS = 300_000; // 5 minutes default timeout for child pi process
+
+function runPiProcess(
+  command: string,
+  args: string[],
+  cwd?: string,
+  signal?: AbortSignal,
+  timeoutMs = PI_PROCESS_TIMEOUT_MS,
+): Promise<PiProcessResult> {
   const result: PiProcessResult = {
     messages: [],
     stderr: "",
@@ -578,6 +626,7 @@ function runPiProcess(command: string, args: string[], cwd?: string, signal?: Ab
     let settled = false;
     let killed = false;
     let sigkillTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let abortHandler: (() => void) | undefined;
 
     const killProc = () => {
@@ -613,6 +662,10 @@ function runPiProcess(command: string, args: string[], cwd?: string, signal?: Ab
       if (sigkillTimeoutId) {
         clearTimeout(sigkillTimeoutId);
         sigkillTimeoutId = undefined;
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
       }
       if (abortHandler && signal) {
         signal.removeEventListener("abort", abortHandler);
@@ -669,6 +722,13 @@ function runPiProcess(command: string, args: string[], cwd?: string, signal?: Ab
         signal.addEventListener("abort", abortHandler, { once: true });
       }
     }
+
+    // Timeout: kill the process if it hasn't completed within timeoutMs.
+    timeoutId = setTimeout(() => {
+      if (settled) return;
+      killProc();
+      settle(new Error(`Secondary pi process timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
   });
 }
 

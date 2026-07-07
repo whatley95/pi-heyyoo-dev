@@ -9,14 +9,15 @@ function makeEvent(toolName: string, args: Record<string, unknown>) {
 describe("loop-detector", () => {
   it("does not flag short history", () => {
     const state = createLoopDetectionState();
-    recordToolCall(state, makeEvent("yoo", { review: "check this" }));
-    recordToolCall(state, makeEvent("yoo", { review: "check this" }));
+    for (let i = 0; i < 4; i++) {
+      recordToolCall(state, makeEvent("yoo", { review: "check this" }));
+    }
     assert.equal(checkLoop(state), null);
   });
 
   it("detects repeated yoo.review without edits", () => {
     const state = createLoopDetectionState();
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 5; i++) {
       recordToolCall(state, makeEvent("yoo", { review: "check this" }));
     }
     const loop = checkLoop(state);
@@ -34,10 +35,10 @@ describe("loop-detector", () => {
     assert.equal(checkLoop(state), null);
   });
 
-  it("detects identical description repeated 7+ times", () => {
+  it("detects identical description repeated 5+ times", () => {
     const state = createLoopDetectionState();
     recordToolCall(state, makeEvent("read_file", { path: "src/a.ts" }));
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 5; i++) {
       recordToolCall(state, makeEvent("yoo", { plan: "implement feature" }));
     }
     const loop = checkLoop(state);

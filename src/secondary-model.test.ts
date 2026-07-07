@@ -109,6 +109,52 @@ describe("secondary-model backends", () => {
     );
   });
 
+  it("retries pi backend on empty output then succeeds", async () => {
+    const cwd = makeTempDir("pi-heyyoo-pi-retry-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini" });
+
+    // First call: exit 0 with no output. Second call: produce assistant text.
+    const script = join(cwd, "fake-pi-retry.js");
+    writeFileSync(
+      script,
+      `
+const fs = require("node:fs");
+const counterFile = ${JSON.stringify(join(cwd, ".retry-count"))};
+let count = 0;
+try { count = parseInt(fs.readFileSync(counterFile, "utf-8"), 10) || 0; } catch {}
+count++;
+fs.writeFileSync(counterFile, String(count), "utf-8");
+if (count === 1) { process.exit(0); }
+console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"recovered on retry"}],usage:{input:5,output:3,cost:0.0001}}}));
+`,
+      "utf-8",
+    );
+    setPiSpawnResolver(() => ({ command: process.execPath, prefixArgs: [script] }));
+
+    const { content } = await callSecondaryModel("openai", "gpt-4o-mini", "system", "user", {
+      thinking: "off",
+      cwd,
+    });
+    assert.equal(content, "recovered on retry");
+  });
+
+  it("throws with attempt count after exhausting pi backend retries", async () => {
+    const cwd = makeTempDir("pi-heyyoo-pi-retry-exhaust-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini" });
+
+    // Always exit 0 with no output.
+    const script = join(cwd, "fake-pi-empty.js");
+    writeFileSync(script, `process.exit(0);`, "utf-8");
+    setPiSpawnResolver(() => ({ command: process.execPath, prefixArgs: [script] }));
+
+    await assert.rejects(
+      () => callSecondaryModel("openai", "gpt-4o-mini", "system", "user", { thinking: "off", cwd }),
+      /no assistant text after 3 attempts/,
+    );
+  });
+
   it("pi backend inherits a sanitized session snapshot when sessionManager is provided", async () => {
     const cwd = makeTempDir("pi-heyyoo-pi-session-");
     tmpDirs.push(cwd);

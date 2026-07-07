@@ -118,6 +118,39 @@ Verdict: pass
     assert.equal(result?.verdict, "needs-work");
   });
 
+  it("does not extract file names as suggestions", () => {
+    const text = `## Review
+
+**Overall: ✅ Looks good.**
+
+### Files affected
+- \`create-order.component.ts\`
+- \`quotation.service.ts\`
+- \`shipment.ts\` (bean constants)
+
+The changes are well-structured and correct.`;
+    const result = salvageReviewFromMarkdown(text);
+    for (const s of result?.suggestions ?? []) {
+      assert.ok(!/\.ts\b/.test(s), `File name leaked into suggestion: ${s}`);
+    }
+  });
+
+  it("skips entire file-listing sections before extracting suggestions", () => {
+    const text = `## Review
+
+### Files affected
+- create-order.component.ts — updated API calls
+- quotation.service.ts — refactored methods
+
+### Notes
+- Consider adding error handling for the new API endpoints.`;
+    const result = salvageReviewFromMarkdown(text);
+    // The descriptive file bullets should be gone, but the real suggestion should remain.
+    const suggestionText = (result?.suggestions ?? []).join(" ");
+    assert.ok(/error handling/.test(suggestionText), `Real suggestion lost: ${suggestionText}`);
+    assert.ok(!/create-order/.test(suggestionText), `File listing leaked: ${suggestionText}`);
+  });
+
   it("does not infer blocked from 'broken' in positive prose", () => {
     const text =
       "## Review\n\n**Overall: ✅ Looks good.**\n\n- Keeps developers from thinking their own build config is broken.\n- Nothing is actually wrong here.";

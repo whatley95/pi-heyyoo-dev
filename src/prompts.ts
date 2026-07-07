@@ -1148,17 +1148,21 @@ export function salvageReviewFromMarkdown(raw: string): ReviewResult | null {
   } else if (issues.length === 0) {
     // No structured issues and no suggestions section: fall back to loose bullets, but filter
     // out lines that describe the diff rather than recommend an action.
-    suggestions = markdownBullets(text).filter((line) => {
+    // First, strip file-listing sections so their bullets are never extracted.
+    const strippedText = text.replace(
+      /^#{1,4}\s+(?:files(?:\s+(?:affected|changed|modified))?|affected\s+files|changed\s+files|modified\s+files)\b[^\n]*(?:\n(?!#{1,4}\s).*)*/gim,
+      "",
+    );
+    suggestions = markdownBullets(strippedText).filter((line) => {
       // Strip leading markdown bold/italic markers before checking.
-      const l = line
-        .toLowerCase()
-        .trim()
-        .replace(/^[*_`]+/, "");
+      const l = line.toLowerCase().trim().replace(/[*_`]/g, "");
       if (l.startsWith("verdict")) return false;
       // Diff descriptions: "Old:", "New:", "Before:", "After:", "Was:", "Now:", etc.
       if (/^(old|new|before|after|was|now|current|previous|changed|change|from|to)\b[:\-—]/.test(l)) return false;
       // Bare URLs or code-only lines are descriptions, not suggestions.
       if (/^`?https?:\/\//.test(l)) return false;
+      // Bare file names (optionally with a parenthetical note) are file listings, not suggestions.
+      if (/^[\w/.-]+\.[a-z]{2,}(?:\s*\([^)]*\))?$/.test(l)) return false;
       return true;
     });
   } else {

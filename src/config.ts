@@ -197,5 +197,6 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     parallelReview: mergeFlag(base.parallelReview, o.parallelReview),
     deepScan: mergeFlag(base.deepScan, o.deepScan),
     modelInfo: mergeModelInfo(base.modelInfo, o.modelInfo),
+    processTimeoutMs: pickOptionalNumber(o.processTimeoutMs, base.processTimeoutMs),
   };
 }
