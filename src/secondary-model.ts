@@ -700,12 +700,21 @@ async function callPiBackend(
         const diag = `messages=${result.messages.length} [${msgRoles}], stderr=${stderrPreview || "(empty)"}`;
         attemptErrors.push(`attempt ${attempt + 1}: ${diag}`);
         if (cwd) {
+          const debug = process.env.PI_HEYYOO_DEBUG === "1" || process.env.PI_HEYYOO_DEBUG === "true";
           logEvent(cwd, "warn", "Pi backend produced no assistant text, retrying", {
             attempt: attempt + 1,
             maxRetries: maxRetries + 1,
             messageCount: result.messages.length,
             provider,
             model,
+            contentTypes: debug
+              ? result.messages.map((m) => ({
+                  role: m.role,
+                  types: Array.isArray(m.content)
+                    ? m.content.map((c) => (c && typeof c === "object" ? (c as ContentPart).type : typeof c))
+                    : typeof m.content,
+                }))
+              : undefined,
           });
         }
       } catch (err) {
