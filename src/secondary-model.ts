@@ -449,22 +449,16 @@ function extractTextFromContent(content: unknown): string {
   return (textParts.length > 0 ? textParts : fallbackParts).join("\n").trim();
 }
 
-function getFinalAssistantText(messages: AssistantMessageLike[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.role !== "assistant") continue;
-    const text = extractTextFromContent(message.content);
-    if (text.length > 0) return text;
-  }
-  return "";
-}
-
 interface PiProcessResult {
   messages: AssistantMessageLike[];
   stderr: string;
   inputTokens: number;
   outputTokens: number;
   cost: number;
+  // Accumulate streamed text/thinking deltas for providers (e.g. anthropic-messages)
+  // where the final message_end event may not include the full content array.
+  streamText: string;
+  streamThinking: string;
 }
 
 function processPiJsonLine(line: string, result: PiProcessResult): void {
@@ -474,6 +468,23 @@ function processPiJsonLine(line: string, result: PiProcessResult): void {
     event = JSON.parse(line) as Record<string, unknown>;
   } catch {
     return;
+  }
+
+  // Accumulate streaming deltas from providers that emit them (Anthropic-style).
+  const delta = event.delta;
+  if (typeof delta === "string") {
+    if (event.type === "thinking_delta") {
+      result.streamThinking += delta;
+    } else if (event.type === "text_delta") {
+      result.streamText += delta;
+    }
+  }
+  // Some events carry the delta in a nested text field.
+  if (event.type === "text_delta" && typeof event.text === "string") {
+    result.streamText += event.text;
+  }
+  if (event.type === "thinking_delta" && typeof event.thinking === "string") {
+    result.streamThinking += event.thinking;
   }
 
   const message = event.message as AssistantMessageLike | undefined;
@@ -494,6 +505,20 @@ function processPiJsonLine(line: string, result: PiProcessResult): void {
       }
     }
   }
+}
+
+function getFinalAssistantText(result: PiProcessResult): string {
+  // Prefer the final assembled message content.
+  for (let i = result.messages.length - 1; i >= 0; i--) {
+    const message = result.messages[i];
+    if (message.role !== "assistant") continue;
+    const text = extractTextFromContent(message.content);
+    if (text.length > 0) return text;
+  }
+  // Fallback to accumulated streaming deltas (for Anthropic-style streaming).
+  if (result.streamText.trim().length > 0) return result.streamText.trim();
+  if (result.streamThinking.trim().length > 0) return result.streamThinking.trim();
+  return "";
 }
 
 const INHERITED_SESSION_MAX_ENTRIES = 10;
@@ -682,7 +707,7 @@ async function callPiBackend(
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const result = await runPiProcess(command, [...prefixArgs, ...args], cwd, signal, processTimeoutMs);
-        const content = getFinalAssistantText(result.messages);
+        const content = getFinalAssistantText(result);
         if (content) {
           const estimatedInputTokens = result.inputTokens ?? estimateTokens(systemPrompt + userPrompt);
           const estimatedOutputTokens = result.outputTokens ?? estimateTokens(content);
@@ -774,6 +799,8 @@ function runPiProcess(
     inputTokens: 0,
     outputTokens: 0,
     cost: 0,
+    streamText: "",
+    streamThinking: "",
   };
 
   return new Promise((resolve, reject) => {
@@ -862,7 +889,7 @@ function runPiProcess(
 
     proc.on("close", (code, procSignal) => {
       const effectiveCode = code ?? (procSignal ? 1 : 0);
-      if (effectiveCode !== 0 && !getFinalAssistantText(result.messages)) {
+      if (effectiveCode !== 0 && !getFinalAssistantText(result)) {
         const stderrPreview = result.stderr.trim().slice(0, 500);
         settle(
           new Error(
