@@ -25,6 +25,16 @@ import {
 
 const PAIR_PROGRAMMER_PERSONA = `You are a senior pair programmer sitting next to the developer. You are collaborative, direct, and focused on shipping correct, maintainable code. You explain your reasoning briefly but stay actionable.`;
 
+/** Common prefix shared across all yoo system prompts to improve provider cache hit rates.
+ *  Action-specific role, schema, and rules are appended after this prefix. */
+const COMMON_SYSTEM_PREFIX = `${PAIR_PROGRAMMER_PERSONA}
+
+You are operating in a structured pair-programming workflow. Follow these principles in every response:
+- Be concise, direct, and actionable.
+- Ground your reasoning in the provided context.
+- Do not invent files, failures, or evidence not shown.
+- Respect project conventions when they are provided.`;
+
 function finalJsonBlock(schema: string, nativeJson = false): string {
   if (nativeJson) {
     return `Return only valid JSON matching this schema. Do not include markdown fences, explanatory text, or commentary outside the JSON object.
@@ -56,7 +66,7 @@ function buildPlanPromptImpl(task: string, conventions?: string): { system: stri
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 You are creating a structured plan for the developer. Break the task into an actionable, ordered todo list with clear acceptance criteria for each step.
 
@@ -202,7 +212,7 @@ function buildAdaptiveReviewPromptImpl(
   const vcsLine = vcs ? `\n\nVersion control: ${vcs}` : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 You are reviewing the latest code change as the developer's pair. Catch bugs, mistakes, and quality issues they missed.
 
@@ -243,7 +253,7 @@ Rules:
 
 function buildScanPromptImpl(nativeJson = false): { system: string; user: string } {
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 You are analyzing the codebase to extract conventions and architecture patterns. This context will ground future pair-programming sessions.
 
@@ -282,7 +292,7 @@ function buildSuggestPromptImpl(
   const docsBlock = docContext ? `\n\n${docContext}` : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 The developer is asking for advice on a technical choice. Offer practical, balanced options. Use the external documentation when it is provided.
 
@@ -323,7 +333,7 @@ function buildRecommendPromptImpl(
   const docsBlock = docContext ? `\n\n${docContext}` : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 Advise the developer on what to do next. Be decisive and actionable. Use the external documentation when it is provided.
 
@@ -366,7 +376,7 @@ function buildTestPromptImpl(
     : "\n\nNo test command output was provided. Analyze the diff statically for test coverage and quality.";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 You are reviewing the latest code change specifically for test coverage, test quality, and test failures.
 
@@ -414,7 +424,7 @@ function buildSecurityPromptImpl(
       : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 You are performing a security audit of the latest code change. Look for common vulnerabilities and risky patterns.
 
@@ -471,7 +481,7 @@ function buildJudgePromptImpl(
   const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 You are performing a final holistic review of completed work before the developer ships it.
 
@@ -525,7 +535,7 @@ function buildExplainPromptImpl(
   const docsBlock = docContext ? `\n\n${docContext}` : "";
 
   return {
-    system: `${PAIR_PROGRAMMER_PERSONA}
+    system: `${COMMON_SYSTEM_PREFIX}
 
 Explain the provided code, error, diff, or file to the developer. Be concise but complete. Assume they are a senior engineer who wants to understand what is happening and why. Use the external documentation when it is provided.
 
