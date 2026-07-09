@@ -89,6 +89,7 @@ Rules:
 - Each todo item should be one small unit of work — the main agent should complete it in 1-2 turns
 - Maximum 5-8 todo items
 - Maximum 5 acceptance criteria
+- Stay scoped to the requested task; do not add unrelated refactoring, cleanup, or extra features
 - Respect the project conventions shown above when choosing file names, structure, and patterns`,
 
     user: `Create a plan for this task:\n\n${task}${conventionsBlock}`,
@@ -311,6 +312,7 @@ Rules:
 - Provide 2-3 concrete approaches
 - Each approach must have at least one pro and one con
 - Be specific — no vague advice like "use a better pattern"
+- Keep suggestions focused on the specific question; do not broaden to unrelated architecture changes
 - Respect the project conventions shown above when evaluating approaches
 - Ground your answer in the external documentation when it is provided`,
 
@@ -353,6 +355,7 @@ Rules:
 - The step must be concrete and immediately actionable
 - Reasoning must explain the trade-off
 - Provide 1-2 alternatives that were considered but rejected
+- Stay within the current task/plan; do not recommend unrelated work or scope expansion
 - Respect the project conventions shown above when choosing file names, structure, and patterns
 - Ground your recommendation in the external documentation when it is provided`,
 
@@ -517,6 +520,7 @@ Rules:
 - issue "severity" must be one of: "high", "medium", "low"
 - "consensus" is true only when verdict is "pass" AND issues is empty
 - Provide a real summary that captures the overall quality, not filler
+- Judge only against the original plan and acceptance criteria; do not introduce new requirements that were not part of the plan
 - If any plan step is incomplete or unreviewed, that's a medium-severity issue
 - Check the review_history — unreviewed steps are blocking`,
 
