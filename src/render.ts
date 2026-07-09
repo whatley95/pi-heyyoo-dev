@@ -71,7 +71,8 @@ function formatTokenCount(n: number): string {
 function modelSuffix(model?: StageProfile): string {
   if (!model?.provider || !model.id) return "";
   const thinking = model.thinking && model.thinking.toLowerCase() !== "off" ? ` (${model.thinking})` : "";
-  return ` · ${model.provider}:${model.id}${thinking}`;
+  const backend = model.backend ? ` [${model.backend}]` : "";
+  return ` · ${model.provider}:${model.id}${thinking}${backend}`;
 }
 
 function severityColor(severity: ReviewIssue["severity"]): string {

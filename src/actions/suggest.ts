@@ -33,7 +33,7 @@ export async function executeYooSuggest(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "suggest", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
-  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking };
+  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking, backend: modelConfig.backend };
   const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig.id, modelConfig);
 
   progress(1, STAGES.suggest, "Loading project conventions…");

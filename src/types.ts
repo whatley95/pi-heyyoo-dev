@@ -3,6 +3,7 @@ export type YooAction = "plan" | "review" | "suggest" | "recommend" | "judge" | 
 /** Tasks that can have a per-model override in settings.json. Includes yoo tool actions plus separate tools like explain. */
 export type YooModelTask = YooAction | "explain";
 
+import type { BackendType } from "./types/secondary-model.js";
 export type {
   BackendType,
   SdkCacheRetention,
@@ -199,6 +200,8 @@ export interface StageProfile {
   provider: string;
   id: string;
   thinking?: string;
+  /** Connection backend used for this call: sdk, http, or pi. */
+  backend?: BackendType;
 }
 
 export interface CallSecondaryModelOptions {

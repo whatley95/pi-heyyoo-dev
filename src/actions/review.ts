@@ -42,7 +42,7 @@ export async function executeYooReview(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "review", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
-  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking };
+  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking, backend: modelConfig.backend };
   const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig.id, modelConfig);
 
   const state = getState(cwd);

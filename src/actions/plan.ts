@@ -26,7 +26,7 @@ export async function executeYooPlan(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "plan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
-  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking };
+  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking, backend: modelConfig.backend };
 
   progress(1, STAGES.plan, "Loading project conventions…");
   const conventions = loadConventions(cwd);
