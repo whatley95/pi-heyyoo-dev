@@ -188,7 +188,12 @@ export async function callSdkBackend(
     modelInfoOverride?.maxOutputTokens ??
     resolveModelInfo(provider, model).maxOutputTokens;
   const thinkingEnabledForBudget = Boolean(thinking) && thinking?.toLowerCase() !== "off";
-  sdkOptions.maxTokens = thinkingEnabledForBudget ? maxOutputTokens : Math.min(maxOutputTokens, 2048);
+  // Reasoning models need the full output budget for internal reasoning tokens.
+  // Structured output tasks (review, judge, test, security, etc.) can also exceed
+  // a cheap 2048 token cap, so allow the full model limit for those too.
+  const structuredOutput = Boolean(options.structuredOutput);
+  sdkOptions.maxTokens =
+    thinkingEnabledForBudget || structuredOutput ? maxOutputTokens : Math.min(maxOutputTokens, 2048);
 
   const stream = piAi.streamSimple(builtinModel, context, sdkOptions);
 

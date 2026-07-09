@@ -160,9 +160,11 @@ async function callOpenAiCompatibleApi(
     Boolean(thinking) && thinking!.toLowerCase() !== "off" && (supportsReasoning || supportsAnthropicThinking);
   const modelInfo = resolveModelInfo(provider, model, modelInfoOverride);
   // Reasoning models can consume a large portion of the output budget in internal reasoning tokens,
-  // so use the model's full output limit when thinking/reasoning is enabled. Otherwise keep calls cheap
-  // while still honoring explicit maxOutputTokens overrides.
-  const outputTokenLimit = thinkingEnabled ? modelInfo.maxOutputTokens : Math.min(modelInfo.maxOutputTokens, 2048);
+  // so use the model's full output limit when thinking/reasoning is enabled. Structured output tasks
+  // (review, judge, test, security, etc.) can also exceed a cheap 2048 token cap, so allow the full
+  // model limit for those. Otherwise keep calls cheap while still honoring explicit maxOutputTokens overrides.
+  const outputTokenLimit =
+    thinkingEnabled || structuredOutput ? modelInfo.maxOutputTokens : Math.min(modelInfo.maxOutputTokens, 2048);
 
   const body: Record<string, unknown> = {
     model,
@@ -273,8 +275,14 @@ async function callOpenAiCompatibleApi(
   }
 
   if (!content || content.trim().length === 0) {
+    const reason = choice.finish_reason ?? "unknown";
+    let hint = "";
+    if (reason === "length") {
+      hint =
+        " The model ran out of output tokens before producing a response. Try increasing maxOutputTokens in settings.json, reducing the review scope with files:[...], or using a model with a larger output window.";
+    }
     throw new Error(
-      `Empty response from secondary model (finish_reason: ${choice.finish_reason ?? "unknown"}). Raw: ${JSON.stringify(data).slice(0, 800)}`,
+      `Empty response from secondary model (finish_reason: ${reason}).${hint} Raw: ${JSON.stringify(data).slice(0, 800)}`,
     );
   }
 
@@ -300,6 +308,7 @@ async function callAnthropicApi(
   thinking?: string,
   modelInfoOverride?: Partial<ReturnType<typeof resolveModelInfo>>,
   sessionId?: string,
+  structuredOutput = false,
 ): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
   const url = `${apiInfo.baseUrl}/messages`;
 
@@ -309,7 +318,9 @@ async function callAnthropicApi(
     modelSupportsAnthropicThinking(provider, model);
   const modelInfo = resolveModelInfo(provider, model, modelInfoOverride);
   // Anthropic counts thinking tokens against max_tokens, so reserve room for visible output.
-  const outputTokenLimit = thinkingEnabled ? modelInfo.maxOutputTokens : Math.min(modelInfo.maxOutputTokens, 2048);
+  // Structured output tasks may need more than a cheap 2048 token cap.
+  const outputTokenLimit =
+    thinkingEnabled || structuredOutput ? modelInfo.maxOutputTokens : Math.min(modelInfo.maxOutputTokens, 2048);
 
   const body: Record<string, unknown> = {
     model,
@@ -622,6 +633,7 @@ export async function callHttpBackend(
       thinking,
       modelInfoOverride,
       sessionId,
+      structuredOutput,
     );
   }
   return callOpenAiCompatibleApi(

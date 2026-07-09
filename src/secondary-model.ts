@@ -111,6 +111,7 @@ export async function callSecondaryModel(
         secondary: effectiveSecondary,
         modelInfoOverride,
         sdkModelInfo,
+        structuredOutput,
         onStreamProgress: options.onStreamProgress,
       });
     }

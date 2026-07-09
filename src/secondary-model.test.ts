@@ -430,6 +430,35 @@ console.log(JSON.stringify({type:"message_end",message:{role:"assistant",content
     assert.deepEqual(body.response_format, { type: "json_object" });
   });
 
+  it("uses full model max_tokens for structured output when thinking is off", async () => {
+    const cwd = makeTempDir("pi-heyyoo-http-struct-tokens-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "openai", id: "gpt-4o-mini", backend: "http", apiKey: "sk-test" });
+
+    let body: Record<string, unknown> = {};
+    global.fetch = async (_url, init) => {
+      body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: "{}" } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+        text: async () => "",
+      } as Response;
+    };
+
+    await callSecondaryModel("openai", "gpt-4o-mini", "system", "user", {
+      thinking: "off",
+      cwd,
+      structuredOutput: true,
+    });
+
+    // gpt-4o-mini catalog maxOutputTokens is 16_384, so structured output should not be capped at 2048.
+    assert.equal(body.max_tokens, 16_384);
+  });
+
   it("omits response_format for unsupported providers even when structuredOutput is true", async () => {
     const cwd = makeTempDir("pi-heyyoo-http-no-json-");
     tmpDirs.push(cwd);
@@ -927,6 +956,26 @@ describe("sdk backend", () => {
 
     await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd, thinking: "off" });
     assert.equal(receivedOptions?.maxTokens, 2048);
+  });
+
+  it("sdk backend uses full catalog maxTokens for structured output when thinking is off", async () => {
+    const cwd = makeTempDir("yoo-sdk-struct-tokens-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    let receivedOptions: SimpleStreamOptions | undefined;
+    setSdkStreamSimpleOverride((_model, _context, options) => {
+      receivedOptions = options;
+      return fakeSdkStream(fakeSdkAssistantMessage("ok"));
+    });
+
+    await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", {
+      cwd,
+      thinking: "off",
+      structuredOutput: true,
+    });
+    assert.equal(receivedOptions?.maxTokens, 4096);
   });
 
   it("sdk backend passes cacheRetention, transport, and retry options", async () => {
