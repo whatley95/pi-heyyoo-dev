@@ -5,6 +5,7 @@ import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
 import { getDiff } from "../diff-grabber.js";
 import { loadConventions, formatConventions } from "../conventions.js";
 import { callSecondaryModel, providerSupportsJsonObject } from "../secondary-model.js";
+import { resolveBackendType } from "../backends/backend-resolver.js";
 import { loadFileContentsForReview, type FileContentEntry } from "../file-loader.js";
 import { runPreReviewCommands, formatPreReviewOutput } from "../pre-review.js";
 import { calculateReviewBudget } from "../token-budget.js";
@@ -66,7 +67,12 @@ export async function executeYooTest(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "test", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
-  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking, backend: modelConfig.backend };
+  const modelProfile = {
+    provider: modelConfig.provider,
+    id: modelConfig.id,
+    thinking: modelConfig.thinking,
+    backend: resolveBackendType(modelConfig.provider, modelConfig),
+  };
   const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig.id, modelConfig);
 
   progress(1, STAGES.test, "Collecting diff…");

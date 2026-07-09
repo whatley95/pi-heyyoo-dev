@@ -61,6 +61,12 @@ function shouldUseSdkBackend(_provider: string, secondary?: SecondaryModelConfig
   return true;
 }
 
+/** Resolve the effective backend type from config, applying the same defaults as resolveBackend. */
+export function resolveBackendType(provider: string, secondary?: SecondaryModelConfig): BackendType {
+  const useSdk = shouldUseSdkBackend(provider, secondary);
+  return secondary?.backend ?? (secondary?.baseUrl ? "http" : useSdk ? "sdk" : "pi");
+}
+
 export async function resolveBackend(
   provider: string,
   model: string,

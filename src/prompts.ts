@@ -242,9 +242,10 @@ Rules:
 - Each issue must include a specific, actionable suggestion
 - "file" and "line" are optional but strongly preferred when you can identify the exact location
 - Respect the project conventions shown above; do NOT flag a pattern as wrong if it matches the conventions
-- Pay attention to pre-review command output (lint/test/typecheck). Failures there are real issues.
+- Pay attention to pre-review command output (lint/test/typecheck). Failures there are real issues ONLY for files changed in this diff; ignore pre-existing warnings in unrelated files.
 - Memory shows past issues in the same files. If a past issue appears again, flag it as regression.
 - CRITICAL: Only flag issues you can see evidence for. If a property, method, template, or style exists in the provided full file contents, do NOT flag it as missing. When unsure, prefer "pass" or "low" severity over guessing.
+- Only flag issues in files that are part of this change (present in the diff or changed file list). Do NOT flag pre-existing problems in unrelated files.
 - Be strict but fair — flag real problems, not preferences`,
 
     user: `Review this code change. The developer says:\n\n${description}${vcsLine}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}${droppedBlock}${budgetBlock}`,

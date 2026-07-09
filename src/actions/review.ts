@@ -19,6 +19,7 @@ import {
   type ConcurrencyOutcome,
 } from "./review-helpers.js";
 import { executeYooJudge } from "./judge.js";
+import { resolveBackendType } from "../backends/backend-resolver.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult, ReviewResult, UsageCost } from "../types.js";
 
@@ -42,7 +43,12 @@ export async function executeYooReview(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "review", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
-  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking, backend: modelConfig.backend };
+  const modelProfile = {
+    provider: modelConfig.provider,
+    id: modelConfig.id,
+    thinking: modelConfig.thinking,
+    backend: resolveBackendType(modelConfig.provider, modelConfig),
+  };
   const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig.id, modelConfig);
 
   const state = getState(cwd);
@@ -324,6 +330,19 @@ export async function executeYooReview(
   }
 
   progress(8, STAGES.review, "Review response received");
+  const changedFilesSet = new Set(changedFiles);
+  const originalIssueCount = review.issues.length;
+  review.issues = review.issues.filter((issue) => {
+    if (!issue.file) return true;
+    return changedFilesSet.has(issue.file);
+  });
+  if (review.issues.length < originalIssueCount) {
+    logEvent(cwd, "info", "Filtered out-of-scope review issues", {
+      original: originalIssueCount,
+      kept: review.issues.length,
+      removed: originalIssueCount - review.issues.length,
+    });
+  }
   recordIssues(cwd, review.issues);
 
   if (finalDiffTruncated) review.truncated = true;

@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
 import { loadConventions, formatConventions } from "../conventions.js";
 import { callSecondaryModel } from "../secondary-model.js";
+import { resolveBackendType } from "../backends/backend-resolver.js";
 import { buildPlanPrompt, validatePlanResult, getPlanValidationErrors, salvagePlanFromMarkdown } from "../prompts.js";
 import { setPlan } from "../session-state.js";
 import {
@@ -26,7 +27,12 @@ export async function executeYooPlan(
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "plan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
-  const modelProfile = { provider: modelConfig.provider, id: modelConfig.id, thinking: modelConfig.thinking, backend: modelConfig.backend };
+  const modelProfile = {
+    provider: modelConfig.provider,
+    id: modelConfig.id,
+    thinking: modelConfig.thinking,
+    backend: resolveBackendType(modelConfig.provider, modelConfig),
+  };
 
   progress(1, STAGES.plan, "Loading project conventions…");
   const conventions = loadConventions(cwd);
