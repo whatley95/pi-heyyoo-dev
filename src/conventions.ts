@@ -27,6 +27,8 @@ function isValidConventions(data: unknown): Conventions | null {
     packageManager: typeof r.packageManager === "string" ? r.packageManager : undefined,
     entryPoints: Array.isArray(r.entryPoints) ? r.entryPoints.map(String) : [],
     scripts: Array.isArray(r.scripts) ? r.scripts.map(String) : [],
+    publicApi: Array.isArray(r.publicApi) ? r.publicApi.map(String) : undefined,
+    commonPatterns: Array.isArray(r.commonPatterns) ? r.commonPatterns.map(String) : undefined,
     styleSample: typeof r.styleSample === "string" ? r.styleSample : undefined,
     agENTSmd: typeof r.agENTSmd === "string" ? r.agENTSmd : undefined,
     generatedAt: typeof r.generatedAt === "string" ? r.generatedAt : new Date().toISOString(),
@@ -160,7 +162,7 @@ function scanDirectory(root: string, dir: string, limit: number): string[] {
   return files;
 }
 
-function readPackageJson(cwd: string): Record<string, unknown> | null {
+export function readPackageJson(cwd: string): Record<string, unknown> | null {
   return readJsonFile(join(cwd, "package.json"));
 }
 
@@ -618,6 +620,15 @@ export function formatConventions(conventions: Conventions): string {
   if (conventions.entryPoints.length > 0) parts.push(`- Entry points: ${conventions.entryPoints.join(", ")}`);
   if (conventions.scripts.length > 0) parts.push(`- Scripts: ${conventions.scripts.slice(0, 5).join("; ")}`);
   parts.push(`- Patterns: ${conventions.patterns.length > 0 ? conventions.patterns.join("; ") : "none recorded"}`);
+  if (conventions.commonPatterns && conventions.commonPatterns.length > 0) {
+    parts.push(`- Common patterns: ${conventions.commonPatterns.join("; ")}`);
+  }
+  if (conventions.publicApi && conventions.publicApi.length > 0) {
+    parts.push(`\nPublic API:\n${conventions.publicApi.slice(0, 20).join("\n")}`);
+    if (conventions.publicApi.length > 20) {
+      parts.push(`... and ${conventions.publicApi.length - 20} more exported symbols`);
+    }
+  }
   if (conventions.styleSample) parts.push(`\nCode style sample:\n\`\`\`\n${conventions.styleSample}\n\`\`\``);
   if (conventions.agENTSmd) parts.push(`\nAGENTS.md:\n${conventions.agENTSmd}`);
   return parts.join("\n");

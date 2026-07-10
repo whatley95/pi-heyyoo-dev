@@ -3,6 +3,7 @@ import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
 import { formatCost, getSessionCost, getReservedCost } from "./cost-tracker.js";
 import { logEvent } from "./logger.js";
 import { resolveModelInfo } from "./model-registry.js";
+import { executeToolLoop } from "./tool-loop.js";
 import {
   callHttpBackend,
   callPiBackend,
@@ -58,7 +59,7 @@ export async function callSecondaryModel(
   userPrompt: string,
   options: CallSecondaryModelOptions = {},
 ): Promise<{ content: string; usage: UsageCost }> {
-  const { signal, thinking: optionsThinking, cwd, sessionManager, relevantPaths, task, structuredOutput } = options;
+  const { thinking: optionsThinking, cwd, task } = options;
   const config = cwd ? loadHeyyooConfig(cwd) : undefined;
   const effectiveSecondary = config && task ? resolveTaskModel(config, task) : config?.secondary;
   provider = (effectiveSecondary?.provider || provider).toLowerCase();
@@ -91,103 +92,115 @@ export async function callSecondaryModel(
     }
   }
 
-  try {
-    if (backend === "pi") {
-      return await callPiBackend(provider, model, systemPrompt, userPrompt, {
-        signal,
-        thinking,
-        cwd,
-        sessionManager,
-        relevantPaths,
-      });
-    }
-
-    if (backend === "sdk") {
-      return await callSdkBackend(provider, model, systemPrompt, userPrompt, {
-        signal,
-        thinking,
-        cwd,
-        sessionManager,
-        secondary: effectiveSecondary,
-        modelInfoOverride,
-        sdkModelInfo,
-        structuredOutput,
-        onStreamProgress: options.onStreamProgress,
-      });
-    }
-
-    if (!apiInfo) {
-      throw new Error(
-        `Unknown provider: ${provider}. Supported providers: ${getSupportedProviders().join(", ")}. ` +
-          `Or set pi-heyyoo.secondary.baseUrl to use any OpenAI-compatible or Anthropic-compatible endpoint.`,
-      );
-    }
-
-    const apiKey = resolveApiKey(provider, effectiveSecondary?.apiKey);
-    if (!apiKey) {
-      throw new Error(
-        `No API key found for provider "${provider}". Set the appropriate environment variable, configure auth.json, ` +
-          `or set pi-heyyoo.secondary.apiKey.`,
-      );
-    }
-
-    return await callHttpBackend(
-      provider,
-      apiInfo,
-      apiKey,
-      model,
-      systemPrompt,
-      userPrompt,
-      signal,
-      thinking,
-      modelInfoOverride,
-      cwd,
-      structuredOutput,
-    );
-  } catch (err) {
-    if (backend === "sdk" && isRetryableBackendError(err)) {
-      if (cwd) {
-        logEvent(cwd, "warn", "SDK backend failed with retryable error; falling back to pi backend", {
-          provider,
-          model,
+  const doCall = async (
+    sys: string,
+    user: string,
+    opts: Omit<CallSecondaryModelOptions, "enableToolLoop" | "maxToolIterations">,
+  ): Promise<{ content: string; usage: UsageCost }> => {
+    try {
+      if (backend === "pi") {
+        return await callPiBackend(provider, model, sys, user, {
+          signal: opts.signal,
           thinking,
-          error: err instanceof Error ? err.message : String(err),
+          cwd: opts.cwd,
+          sessionManager: opts.sessionManager,
+          relevantPaths: opts.relevantPaths,
         });
       }
-      try {
-        return await callPiBackend(provider, model, systemPrompt, userPrompt, {
-          signal,
+
+      if (backend === "sdk") {
+        return await callSdkBackend(provider, model, sys, user, {
+          signal: opts.signal,
           thinking,
-          cwd,
-          sessionManager,
-          relevantPaths,
+          cwd: opts.cwd,
+          sessionManager: opts.sessionManager,
+          secondary: effectiveSecondary,
+          modelInfoOverride,
+          sdkModelInfo,
+          structuredOutput: opts.structuredOutput,
+          onStreamProgress: opts.onStreamProgress,
         });
-      } catch (piErr) {
-        const sdkMsg = err instanceof Error ? err.message : String(err);
-        const piMsg = piErr instanceof Error ? piErr.message : String(piErr);
-        const combined = new Error(`SDK backend failed: ${sdkMsg}; pi fallback also failed: ${piMsg}`);
+      }
+
+      if (!apiInfo) {
+        throw new Error(
+          `Unknown provider: ${provider}. Supported providers: ${getSupportedProviders().join(", ")}. ` +
+            `Or set pi-heyyoo.secondary.baseUrl to use any OpenAI-compatible or Anthropic-compatible endpoint.`,
+        );
+      }
+
+      const apiKey = resolveApiKey(provider, effectiveSecondary?.apiKey);
+      if (!apiKey) {
+        throw new Error(
+          `No API key found for provider "${provider}". Set the appropriate environment variable, configure auth.json, ` +
+            `or set pi-heyyoo.secondary.apiKey.`,
+        );
+      }
+
+      return await callHttpBackend(
+        provider,
+        apiInfo,
+        apiKey,
+        model,
+        sys,
+        user,
+        opts.signal,
+        thinking,
+        modelInfoOverride,
+        opts.cwd,
+        opts.structuredOutput,
+      );
+    } catch (err) {
+      if (backend === "sdk" && isRetryableBackendError(err)) {
         if (cwd) {
-          logEvent(cwd, "error", combined.message, {
+          logEvent(cwd, "warn", "SDK backend failed with retryable error; falling back to pi backend", {
             provider,
             model,
             thinking,
-            promptTokensEstimate: Math.ceil((systemPrompt.length + userPrompt.length) / 4),
-            backend: "sdk->pi",
+            error: err instanceof Error ? err.message : String(err),
           });
         }
-        throw combined;
+        try {
+          return await callPiBackend(provider, model, sys, user, {
+            signal: opts.signal,
+            thinking,
+            cwd: opts.cwd,
+            sessionManager: opts.sessionManager,
+            relevantPaths: opts.relevantPaths,
+          });
+        } catch (piErr) {
+          const sdkMsg = err instanceof Error ? err.message : String(err);
+          const piMsg = piErr instanceof Error ? piErr.message : String(piErr);
+          const combined = new Error(`SDK backend failed: ${sdkMsg}; pi fallback also failed: ${piMsg}`);
+          if (cwd) {
+            logEvent(cwd, "error", combined.message, {
+              provider,
+              model,
+              thinking,
+              promptTokensEstimate: Math.ceil((sys.length + user.length) / 4),
+              backend: "sdk->pi",
+            });
+          }
+          throw combined;
+        }
       }
-    }
 
-    if (cwd) {
-      logEvent(cwd, "error", err instanceof Error ? err.message : String(err), {
-        provider,
-        model,
-        thinking,
-        promptTokensEstimate: Math.ceil((systemPrompt.length + userPrompt.length) / 4),
-        backend,
-      });
+      if (cwd) {
+        logEvent(cwd, "error", err instanceof Error ? err.message : String(err), {
+          provider,
+          model,
+          thinking,
+          promptTokensEstimate: Math.ceil((sys.length + user.length) / 4),
+          backend,
+        });
+      }
+      throw err;
     }
-    throw err;
+  };
+
+  if (options.enableToolLoop && cwd) {
+    return executeToolLoop(cwd, systemPrompt, userPrompt, options, doCall, options.maxToolIterations);
   }
+
+  return doCall(systemPrompt, userPrompt, options);
 }

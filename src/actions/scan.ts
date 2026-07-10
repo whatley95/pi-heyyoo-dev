@@ -13,7 +13,7 @@ import {
 import { buildScanPrompt, validateConventionsResult, parseJsonResponse } from "../prompts.js";
 import { resolveModelInfo } from "../model-registry.js";
 import { estimateTokens } from "../token-budget.js";
-import { buildProjectIndex, saveProjectIndex } from "../project-index.js";
+import { buildProjectIndex, saveProjectIndex, enrichConventionsFromIndex } from "../project-index.js";
 import { logEvent } from "../logger.js";
 import { STAGES, secondaryModelLabel, recordCostWithBudget, createStreamProgressCallback } from "./shared.js";
 import type { ProgressReporter } from "../progress.js";
@@ -120,9 +120,15 @@ export async function executeYooScan(
     try {
       const index = buildProjectIndex(cwd);
       saveProjectIndex(cwd, index);
+      const enriched = enrichConventionsFromIndex(conventions, index);
+      conventions.publicApi = enriched.publicApi;
+      conventions.commonPatterns = enriched.commonPatterns;
+      saveConventions(cwd, conventions);
       logEvent(cwd, "info", "Project index built", {
         files: index.files.length,
         symbols: index.files.reduce((sum, f) => sum + f.symbols.length, 0),
+        publicApiCount: conventions.publicApi?.length,
+        commonPatternsCount: conventions.commonPatterns?.length,
       });
     } catch (err) {
       logEvent(cwd, "warn", "Failed to build project index", {

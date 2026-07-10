@@ -1863,12 +1863,18 @@ function formatResultText(result: YooToolResult): string {
     lines.push(`## yoo review ${icon} ${result.review.verdict}${formatModelSuffix(result.model)}`);
     lines.push("");
 
-    if (result.review.truncated || (result.review.droppedFiles && result.review.droppedFiles.length > 0)) {
+    if (
+      result.review.contextLimited ||
+      result.review.truncated ||
+      (result.review.droppedFiles && result.review.droppedFiles.length > 0)
+    ) {
       const warnings: string[] = [];
       if (result.review.truncated) warnings.push("diff truncated");
       if (result.review.droppedFiles && result.review.droppedFiles.length > 0)
         warnings.push(`${result.review.droppedFiles.length} file(s) omitted from context`);
+      if (result.review.contextLimited) warnings.push("context limited");
       lines.push(`⚠️ **Large change:** ${warnings.join(" · ")}`);
+      lines.push("Some context was omitted; verify any surprising findings against the actual files before acting.");
       lines.push("");
     }
 
@@ -2024,6 +2030,22 @@ function formatResultText(result: YooToolResult): string {
     const icon = result.judge.verdict === "pass" ? "✓" : result.judge.verdict === "blocked" ? "✗" : "⚠";
     lines.push(`## yoo judge ${icon} ${result.judge.verdict}${formatModelSuffix(result.model)}`);
     lines.push("");
+
+    if (
+      result.judge.contextLimited ||
+      result.judge.truncated ||
+      (result.judge.droppedFiles && result.judge.droppedFiles.length > 0)
+    ) {
+      const warnings: string[] = [];
+      if (result.judge.truncated) warnings.push("diff truncated");
+      if (result.judge.droppedFiles && result.judge.droppedFiles.length > 0)
+        warnings.push(`${result.judge.droppedFiles.length} file(s) omitted from context`);
+      if (result.judge.contextLimited) warnings.push("context limited");
+      lines.push(`⚠️ **Large change:** ${warnings.join(" · ")}`);
+      lines.push("Some context was omitted; verify any surprising findings against the actual files before acting.");
+      lines.push("");
+    }
+
     lines.push(result.judge.summary);
     lines.push("");
 
@@ -2055,16 +2077,22 @@ function formatResultText(result: YooToolResult): string {
     lines.push("");
     lines.push("### Main agent verification required");
     lines.push("");
-    lines.push("Before acting on this yoo finding, confirm whether it actually makes sense.");
+    lines.push(
+      "The user (or `verifyByDefault`) asked for explicit confirmation. Do **not** implement, edit, or merge anything based on this yoo result until you complete the verification below.",
+    );
     lines.push("");
     lines.push("Reply with:");
     lines.push("- **Agreement:** `AGREE` / `DISAGREE` / `UNSURE`");
-    lines.push("- **Reasoning:** Why does or doesn't this finding make sense?");
     lines.push(
-      "- **Evidence:** Cite specific files, lines, facts, or reasoning from the context that support your position.",
+      "- **Reasoning:** Why does or doesn't this finding make sense? Reference the relevant code, diff, plan step, or convention.",
+    );
+    lines.push(
+      "- **Evidence:** Cite specific files, line numbers, test output, or facts from the context that support your position. Do not cite evidence you cannot see.",
     );
     lines.push("");
-    lines.push("Do not treat the finding as accepted until you provide this verification.");
+    lines.push(
+      "If you DISAGREE or are UNSURE, explain the contradiction and ask the user for clarification rather than proceeding.",
+    );
   }
 
   return lines.join("\n");

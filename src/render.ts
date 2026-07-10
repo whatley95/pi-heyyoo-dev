@@ -154,11 +154,12 @@ export function renderResult(
     const color = r.review.verdict === "pass" ? "green" : r.review.verdict === "blocked" ? "error" : "yellow";
     lines.push(theme.fg(color, `yoo review ${icon} ${r.review.verdict}${modelSuffix(r.model)}`));
 
-    if (r.review.truncated || (r.review.droppedFiles && r.review.droppedFiles.length > 0)) {
+    if (r.review.contextLimited || r.review.truncated || (r.review.droppedFiles && r.review.droppedFiles.length > 0)) {
       const warnings: string[] = [];
       if (r.review.truncated) warnings.push("diff truncated");
       if (r.review.droppedFiles && r.review.droppedFiles.length > 0)
         warnings.push(`${r.review.droppedFiles.length} file(s) omitted`);
+      if (r.review.contextLimited) warnings.push("context limited");
       lines.push(`  ${theme.fg("yellow", `⚠ large change: ${warnings.join(" · ")}`)}`);
     }
 
@@ -225,6 +226,16 @@ export function renderResult(
     const icon = r.judge.verdict === "pass" ? "✓" : r.judge.verdict === "blocked" ? "✗" : "⚠";
     const color = r.judge.verdict === "pass" ? "green" : r.judge.verdict === "blocked" ? "error" : "yellow";
     lines.push(theme.fg(color, `yoo judge ${icon} ${r.judge.verdict}${modelSuffix(r.model)}`));
+
+    if (r.judge.contextLimited || r.judge.truncated || (r.judge.droppedFiles && r.judge.droppedFiles.length > 0)) {
+      const warnings: string[] = [];
+      if (r.judge.truncated) warnings.push("diff truncated");
+      if (r.judge.droppedFiles && r.judge.droppedFiles.length > 0)
+        warnings.push(`${r.judge.droppedFiles.length} file(s) omitted`);
+      if (r.judge.contextLimited) warnings.push("context limited");
+      lines.push(`  ${theme.fg("yellow", `⚠ large change: ${warnings.join(" · ")}`)}`);
+    }
+
     lines.push(`  ${theme.fg("dim", r.judge.summary)}`);
     if (r.judge.issues.length > 0) {
       lines.push(`  ${theme.fg("dim", `${r.judge.issues.length} remaining issue(s)`)}`);

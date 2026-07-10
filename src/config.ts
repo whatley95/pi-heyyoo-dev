@@ -143,6 +143,8 @@ const KNOWN_CONFIG_KEYS = new Set([
   "reviewMaxInputTokens",
   "reviewStrategy",
   "verifyByDefault",
+  "selfVerify",
+  "toolUseLoop",
   "parallelReview",
   "deepScan",
   "modelInfo",
@@ -328,6 +330,8 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
       ? o.reviewStrategy
       : base.reviewStrategy,
     verifyByDefault: typeof o.verifyByDefault === "boolean" ? o.verifyByDefault : base.verifyByDefault,
+    selfVerify: typeof o.selfVerify === "boolean" ? o.selfVerify : base.selfVerify,
+    toolUseLoop: mergeFlag(base.toolUseLoop, o.toolUseLoop),
     parallelReview: mergeFlag(base.parallelReview, o.parallelReview),
     deepScan: mergeFlag(base.deepScan, o.deepScan),
     modelInfo: mergeModelInfo(base.modelInfo, o.modelInfo),

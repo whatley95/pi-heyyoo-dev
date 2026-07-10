@@ -62,8 +62,9 @@ Rules for the final JSON block:
 - Do not include any text after the closing JSON fence.`;
 }
 
-function buildPlanPromptImpl(task: string, conventions?: string): { system: string; user: string } {
+function buildPlanPromptImpl(task: string, conventions?: string, snapshot?: string): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
+  const snapshotBlock = snapshot ? `\n\n<project_snapshot>\n${snapshot}\n</project_snapshot>` : "";
 
   return {
     system: `${COMMON_SYSTEM_PREFIX}
@@ -90,9 +91,11 @@ Rules:
 - Maximum 5-8 todo items
 - Maximum 5 acceptance criteria
 - Stay scoped to the requested task; do not add unrelated refactoring, cleanup, or extra features
-- Respect the project conventions shown above when choosing file names, structure, and patterns`,
+- Respect the project conventions shown above when choosing file names, structure, and patterns
+- Use the project snapshot to ground the plan in the actual codebase. Prefer existing file paths/patterns from the snapshot. If a step requires a new file, explain why.
+${EVIDENCE_RULES}`,
 
-    user: `Create a plan for this task:\n\n${task}${conventionsBlock}`,
+    user: `Create a plan for this task:\n\n${task}${conventionsBlock}${snapshotBlock}`,
   };
 }
 
@@ -105,6 +108,12 @@ const REVIEW_RUBRIC = `Review rubric — check ALL of the following categories:
 5. COMPLETENESS: Does the code actually implement what was described? Are all acceptance criteria met?
 
 For each issue found, provide a concrete, actionable fix suggestion. Do NOT suggest fixes that you cannot derive from the code shown.`;
+
+const EVIDENCE_RULES = `EVIDENCE REQUIREMENTS:
+- Every issue, finding, or judgment must cite specific supporting evidence: a file path, line number, diff hunk, convention, or external doc.
+- If you cannot point to supporting context, downgrade the severity or omit the claim.
+- Do not invent files, failures, lines, or evidence not shown in the provided context.
+- Respect project conventions; do NOT flag a pattern as wrong if it matches the conventions shown.`;
 
 const MAX_CACHED_PROMPT_SIZE = 50_000;
 const promptCacheClearers: Array<() => void> = [];
@@ -252,7 +261,8 @@ Rules:
 - When reviewing a code change (a diff is provided), only flag issues in files that are part of that change. Do NOT flag pre-existing problems in unrelated files.
 - When no diff is provided and the developer asks you to review a specific function/file, review exactly that requested scope.
 - If a current plan step is shown above, only evaluate acceptance criteria that are relevant to that step. Do NOT flag work from other plan steps as missing.
-- Be strict but fair — flag real problems, not preferences`,
+- Be strict but fair — flag real problems, not preferences
+${EVIDENCE_RULES}`,
 
     user: `Review this code change. The developer says:\n\n${description}${vcsLine}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}${droppedBlock}${budgetBlock}`,
   };
@@ -294,14 +304,19 @@ function buildSuggestPromptImpl(
   conventions?: string,
   nativeJson = false,
   docContext = "",
+  fileContents: FileContentContext[] = [],
 ): { system: string; user: string } {
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
   const docsBlock = docContext ? `\n\n${docContext}` : "";
+  const filesBlock =
+    fileContents.length > 0
+      ? `\n\n<relevant_files>\n${fileContents.map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`).join("\n\n")}\n</relevant_files>`
+      : "";
 
   return {
     system: `${COMMON_SYSTEM_PREFIX}
 
-The developer is asking for advice on a technical choice. Offer practical, balanced options. Use the external documentation when it is provided.
+The developer is asking for advice on a technical choice. Offer practical, balanced options. Use the external documentation and relevant files when they are provided.
 
 ${finalJsonBlock(
   `{
@@ -318,9 +333,11 @@ Rules:
 - Be specific — no vague advice like "use a better pattern"
 - Keep suggestions focused on the specific question; do not broaden to unrelated architecture changes
 - Respect the project conventions shown above when evaluating approaches
-- Ground your answer in the external documentation when it is provided`,
+- Ground your answer in the external documentation and relevant files when they are provided
+- If the relevant files do not cover the question, say so and base your answer on conventions and docs only
+${EVIDENCE_RULES}`,
 
-    user: `I need advice on:\n\n${question}${conventionsBlock}${docsBlock}`,
+    user: `I need advice on:\n\n${question}${conventionsBlock}${docsBlock}${filesBlock}`,
   };
 }
 
@@ -330,6 +347,9 @@ function buildRecommendPromptImpl(
   conventions?: string,
   nativeJson = false,
   docContext = "",
+  fileContents: FileContentContext[] = [],
+  currentStep?: string,
+  memoryContext = "",
 ): { system: string; user: string } {
   const planContext = planTodo?.length
     ? `\n\nCurrent plan (check items already done):\n${planTodo
@@ -339,11 +359,17 @@ function buildRecommendPromptImpl(
 
   const conventionsBlock = conventions ? `\n\n<project_conventions>\n${conventions}\n</project_conventions>` : "";
   const docsBlock = docContext ? `\n\n${docContext}` : "";
+  const filesBlock =
+    fileContents.length > 0
+      ? `\n\n<relevant_files>\n${fileContents.map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`).join("\n\n")}\n</relevant_files>`
+      : "";
+  const currentStepBlock = currentStep ? `\n\nCurrent plan step:\n${currentStep}` : "";
+  const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
 
   return {
     system: `${COMMON_SYSTEM_PREFIX}
 
-Advise the developer on what to do next. Be decisive and actionable. Use the external documentation when it is provided.
+Advise the developer on what to do next. Be decisive and actionable. Use the external documentation, relevant files, and recent review memory when they are provided.
 
 ${finalJsonBlock(
   `{
@@ -361,9 +387,11 @@ Rules:
 - Provide 1-2 alternatives that were considered but rejected
 - Stay within the current task/plan; do not recommend unrelated work or scope expansion
 - Respect the project conventions shown above when choosing file names, structure, and patterns
-- Ground your recommendation in the external documentation when it is provided`,
+- Ground your recommendation in the external documentation and relevant files when they are provided
+- If the relevant files do not cover the situation, say so and base your recommendation on the plan, conventions, and docs
+${EVIDENCE_RULES}`,
 
-    user: `Here's where I'm at:\n\n${situation}${planContext}${conventionsBlock}${docsBlock}\n\nWhat should I do next?`,
+    user: `Here's where I'm at:\n\n${situation}${planContext}${currentStepBlock}${conventionsBlock}${docsBlock}${filesBlock}${memoryBlock}\n\nWhat should I do next?`,
   };
 }
 
@@ -419,7 +447,8 @@ Rules:
 - When no diff is provided and the developer asks about a specific function/file, evaluate exactly that requested scope.
 - If a current plan step is shown above, only evaluate test coverage relevant to that step. Do NOT flag missing tests for work from other plan steps.
 - "missingTests" should list only production files whose behavior is changed by the diff and lack a corresponding test.
-- Respect project conventions when suggesting test file names or patterns`,
+- Respect project conventions when suggesting test file names or patterns
+${EVIDENCE_RULES}`,
 
     user: `Review this change for test coverage and quality. The developer says:\n\n${description}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${testOutputBlock}${conventionsBlock}`,
   };
@@ -468,7 +497,8 @@ Rules:
 - When auditing a code change (a diff is provided), only flag security findings in files that are part of that change. Do NOT flag pre-existing vulnerabilities in unrelated files.
 - When no diff is provided and the developer asks about a specific function/file, audit exactly that requested scope.
 - If a current plan step is shown above, only evaluate security risks relevant to that step. Do NOT flag missing security work from other plan steps.
-- Pay special attention to: hardcoded secrets, SQL/command injection, unsafe eval, missing input validation, insecure auth, permissive CORS, dependency upgrades, and logging sensitive data`,
+- Pay special attention to: hardcoded secrets, SQL/command injection, unsafe eval, missing input validation, insecure auth, permissive CORS, dependency upgrades, and logging sensitive data
+${EVIDENCE_RULES}`,
 
     user: `Audit this change for security issues. The developer says:\n\n${description}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${conventionsBlock}`,
   };
@@ -476,14 +506,36 @@ Rules:
 
 function buildJudgePromptImpl(
   description: string,
-  planTodo?: PlanTodoItem[],
-  acceptanceCriteria?: string[],
-  reviewHistory?: string,
-  conventions?: string,
-  preReviewOutput?: string,
-  memoryContext?: string,
-  nativeJson = false,
+  options: {
+    planTodo?: PlanTodoItem[];
+    acceptanceCriteria?: string[];
+    reviewHistory?: string;
+    conventions?: string;
+    preReviewOutput?: string;
+    memoryContext?: string;
+    diff?: string;
+    fileContents?: FileContentContext[];
+    truncated?: boolean;
+    droppedFiles?: string[];
+    budgetNote?: string;
+    nativeJson?: boolean;
+  } = {},
 ): { system: string; user: string } {
+  const {
+    planTodo,
+    acceptanceCriteria,
+    reviewHistory,
+    conventions,
+    preReviewOutput,
+    memoryContext,
+    diff,
+    fileContents,
+    truncated,
+    droppedFiles,
+    budgetNote,
+    nativeJson,
+  } = options;
+
   const planBlock = planTodo?.length
     ? `\n\nOriginal plan:\n${planTodo.map((t, i) => `${i + 1}. ${planStepDescription(t)}`).join("\n")}`
     : "";
@@ -500,10 +552,27 @@ function buildJudgePromptImpl(
   const preReviewBlock = preReviewOutput ? `\n\n<pre_review_output>\n${preReviewOutput}\n</pre_review_output>` : "";
   const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
 
+  const diffBlock = diff ? `\n\n<diff>\n${diff}\n</diff>` : "";
+  const fileContentsBlock =
+    fileContents && fileContents.length > 0
+      ? `\n\n<file_contents>\n${fileContents.map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`).join("\n\n")}\n</file_contents>`
+      : "";
+
+  const droppedBlock =
+    droppedFiles && droppedFiles.length > 0
+      ? `\n\n⚠️ Some changed files were omitted due to token budget: ${droppedFiles.join(", ")}`
+      : "";
+
+  const truncationNotice = truncated
+    ? "\n\n⚠️ NOTE: The diff was truncated because it was too large. Judge only what's visible."
+    : "";
+
+  const budgetBlock = budgetNote ? `\n\n${budgetNote}` : "";
+
   return {
     system: `${COMMON_SYSTEM_PREFIX}
 
-You are performing a final holistic review of completed work before the developer ships it.
+You are performing a final holistic review of completed work before the developer ships it. You are given the actual diff and changed file contents, so judge the code directly rather than trusting the review history alone.
 
 ${REVIEW_RUBRIC}
 
@@ -532,9 +601,37 @@ Rules:
 - Provide a real summary that captures the overall quality, not filler
 - Judge only against the original plan and acceptance criteria; do not introduce new requirements that were not part of the plan
 - If any plan step is incomplete or unreviewed, that's a medium-severity issue
-- Check the review_history — unreviewed steps are blocking`,
+- Check the review_history — unreviewed steps are blocking
+- When the diff/file contents are truncated, do not treat missing context as a defect; judge only what is shown
+${EVIDENCE_RULES}`,
 
-    user: `Judge this completed work:\n\n${description}${planBlock}${criteriaBlock}${historyBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}`,
+    user: `Judge this completed work:\n\n${description}${planBlock}${criteriaBlock}${historyBlock}${diffBlock}${fileContentsBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}${droppedBlock}${budgetBlock}`,
+  };
+}
+
+function buildVerifyPromptImpl(
+  originalContext: string,
+  originalResult: string,
+  task: "review" | "judge",
+): { system: string; user: string } {
+  return {
+    system: `${COMMON_SYSTEM_PREFIX}
+
+You are critiquing a ${task} result produced by another language model. Your job is to remove or downgrade any claim that is not supported by the original context.
+
+Rules:
+- Read the original context carefully. It contains the diff, file contents, conventions, and other data the first model saw.
+- Read the ${task} result. For every issue, finding, suggestion, or judgment, ask: "Is there specific evidence in the original context that supports this?"
+- Remove any issue/finding/suggestion that has no supporting evidence.
+- Downgrade severity (high→medium, medium→low) if the evidence is weak or indirect.
+- Do NOT add new issues that were not in the original result.
+- Do NOT change a verdict from "pass" to "needs-work" or "blocked" unless the original result itself contained unsupported claims that must be removed.
+- If the original result is well-supported, return it unchanged.
+- Preserve the original JSON schema and structure.
+
+${EVIDENCE_RULES}`,
+
+    user: `Original context provided to the ${task} model:\n\n${originalContext}\n\n---\n\n${task} result to verify:\n\n${originalResult}\n\n---\n\nReturn the corrected ${task} result. Remove or downgrade any unsupported claims. If everything is supported, return the original result unchanged.`,
   };
 }
 
@@ -587,6 +684,7 @@ export const buildRecommendPrompt = memoizePromptBuilder(buildRecommendPromptImp
 export const buildTestPrompt = buildTestPromptImpl;
 export const buildSecurityPrompt = buildSecurityPromptImpl;
 export const buildJudgePrompt = memoizePromptBuilder(buildJudgePromptImpl);
+export const buildVerifyPrompt = buildVerifyPromptImpl;
 
 export function parseJsonResponse<T>(text: string): T | null {
   // Strip BOM and normalize line endings.

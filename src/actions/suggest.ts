@@ -1,6 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
 import { loadConventions, formatConventions } from "../conventions.js";
+import { findRelevantFiles } from "../project-index.js";
+import { loadRelevantFileContents } from "../project-snapshot.js";
 import { callSecondaryModel, providerSupportsJsonObject } from "../secondary-model.js";
 import { resolveBackendType } from "../backends/backend-resolver.js";
 import {
@@ -42,9 +44,20 @@ export async function executeYooSuggest(
   };
   const nativeJson = providerSupportsJsonObject(modelConfig.provider, modelConfig.id, modelConfig);
 
-  progress(1, STAGES.suggest, "Loading project conventions…");
+  progress(1, STAGES.suggest, "Loading project conventions and relevant files…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
+
+  const relevantFiles = findRelevantFiles(cwd, question, 5);
+  if (relevantFiles.length === 0) {
+    logEvent(cwd, "info", "yoo suggest found no indexed relevant files; consider running yoo scan deep", {
+      query: question.slice(0, 200),
+    });
+  }
+  const fileContents = loadRelevantFileContents(
+    cwd,
+    relevantFiles.map((f) => f.file),
+  );
 
   let docContext = "";
   if (docRequest.docs?.length) {
@@ -52,7 +65,7 @@ export async function executeYooSuggest(
     docContext = await loadDocContext(cwd, config.docs, docRequest);
   }
 
-  const { system, user } = buildSuggestPrompt(question, conventionsText, nativeJson, docContext);
+  const { system, user } = buildSuggestPrompt(question, conventionsText, nativeJson, docContext, fileContents);
   progress(2, STAGES.suggest, `Calling ${secondaryModelLabel(modelConfig)}…`);
   let raw: string;
   let usage: UsageCost;

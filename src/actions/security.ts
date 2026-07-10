@@ -19,6 +19,7 @@ import {
   recordCostWithBudget,
   parseStructuredResult,
   createStreamProgressCallback,
+  toolLoopOptions,
 } from "./shared.js";
 import { getSessionContext } from "./review-helpers.js";
 import { getState } from "../session-state.js";
@@ -118,7 +119,14 @@ export async function executeYooSecurity(
   });
   const fileContents = mapFileContentEntries(fileResult.entries);
 
-  const { system, user } = buildSecurityPrompt(description, diff, fileContents, conventionsText, nativeJson, currentStep);
+  const { system, user } = buildSecurityPrompt(
+    description,
+    diff,
+    fileContents,
+    conventionsText,
+    nativeJson,
+    currentStep,
+  );
   progress(4, STAGES.security, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
@@ -128,6 +136,7 @@ export async function executeYooSecurity(
     task: "security",
     structuredOutput: true,
     onStreamProgress: createStreamProgressCallback(progress, 4, STAGES.security),
+    ...toolLoopOptions(config),
   });
 
   progress(5, STAGES.security, "Parsing security audit…");

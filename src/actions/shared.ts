@@ -3,7 +3,7 @@ import { loadHeyyooConfig } from "../config.js";
 import { logEvent } from "../logger.js";
 import { parseJsonResponse, getJsonParseError } from "../prompts.js";
 import type { ProgressReporter } from "../progress.js";
-import type { UsageCost, SecondaryModelConfig } from "../types.js";
+import type { UsageCost, SecondaryModelConfig, HeyyooConfig } from "../types.js";
 
 export const STAGES = {
   plan: 3,
@@ -52,6 +52,14 @@ export function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
   return String(n);
+}
+
+export function toolLoopOptions(config: HeyyooConfig): { enableToolLoop: boolean; maxToolIterations?: number } {
+  if (!config.toolUseLoop) return { enableToolLoop: false };
+  return {
+    enableToolLoop: true,
+    maxToolIterations: typeof config.toolUseLoop === "number" ? config.toolUseLoop : undefined,
+  };
 }
 
 export function parseStructuredResult<T>(

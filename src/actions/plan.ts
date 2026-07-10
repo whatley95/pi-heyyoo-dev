@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
 import { loadConventions, formatConventions } from "../conventions.js";
+import { buildProjectSnapshot, formatProjectSnapshot } from "../project-snapshot.js";
 import { callSecondaryModel } from "../secondary-model.js";
 import { resolveBackendType } from "../backends/backend-resolver.js";
 import { buildPlanPrompt, validatePlanResult, getPlanValidationErrors, salvagePlanFromMarkdown } from "../prompts.js";
@@ -34,12 +35,14 @@ export async function executeYooPlan(
     backend: resolveBackendType(modelConfig.provider, modelConfig),
   };
 
-  progress(1, STAGES.plan, "Loading project conventions…");
+  progress(1, STAGES.plan, "Loading project conventions and snapshot…");
   const conventions = loadConventions(cwd);
   const conventionsText = conventions ? formatConventions(conventions) : "";
+  const snapshot = buildProjectSnapshot(cwd);
+  const snapshotText = formatProjectSnapshot(snapshot);
 
   progress(2, STAGES.plan, `Calling ${secondaryModelLabel(modelConfig)}…`);
-  const { system, user } = buildPlanPrompt(task, conventionsText);
+  const { system, user } = buildPlanPrompt(task, conventionsText, snapshotText);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
     thinking: modelConfig.thinking,

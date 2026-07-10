@@ -11,7 +11,7 @@ import { getSessionCost, formatCost, reserveCost, releaseCost } from "../cost-tr
 import { logEvent } from "../logger.js";
 import { getState, markStepComplete, incrementReviewRounds, getProgress } from "../session-state.js";
 import { planStepDescription } from "../types.js";
-import { STAGES, secondaryModelLabel, recordCostWithBudget, mergeUsageCost } from "./shared.js";
+import { STAGES, secondaryModelLabel, recordCostWithBudget, mergeUsageCost, toolLoopOptions } from "./shared.js";
 import {
   getSessionContext,
   runWithConcurrencyLimit,
@@ -21,6 +21,8 @@ import {
 } from "./review-helpers.js";
 import { executeYooJudge } from "./judge.js";
 import { resolveBackendType } from "../backends/backend-resolver.js";
+import { validateReviewResult, getReviewValidationErrors, salvageReviewFromMarkdown } from "../prompts.js";
+import { verifyResult, mergeVerifiedCost } from "./verify.js";
 import type { ProgressReporter } from "../progress.js";
 import type { YooToolResult, ReviewResult, UsageCost } from "../types.js";
 
@@ -230,6 +232,7 @@ export async function executeYooReview(
         sessionManager: ctx.sessionManager,
         relevantPaths: [p.file],
         nativeJson,
+        ...toolLoopOptions(config),
       });
       return { review: result.review, usage: result.usage, dropped: p.fileResult.dropped };
     });
@@ -301,7 +304,7 @@ export async function executeYooReview(
     finalDroppedFiles = [...fileResult.dropped, ...skippedDueToTruncation];
 
     progress(7, STAGES.review, "Building review prompt…");
-    let result: { review: ReviewResult; usage: UsageCost };
+    let result: Awaited<ReturnType<typeof runReviewBatch>>;
     try {
       result = await runReviewBatch({
         cwd,
@@ -324,6 +327,7 @@ export async function executeYooReview(
         relevantPaths: Array.from(new Set([...(options.files ?? []), ...changedFiles])),
         progress,
         nativeJson,
+        ...toolLoopOptions(config),
       });
     } catch (err) {
       return {
@@ -334,6 +338,29 @@ export async function executeYooReview(
     }
     review = result.review;
     cost = recordCostWithBudget(cwd, result.usage);
+
+    if (config.selfVerify) {
+      progress(8, STAGES.review, "Self-verifying review result…");
+      try {
+        const verified = await verifyResult(cwd, modelConfig, {
+          originalSystem: result.system,
+          originalUser: result.user,
+          result: review,
+          task: "review",
+          signal,
+          sessionManager: ctx.sessionManager,
+          validate: validateReviewResult,
+          validationErrors: getReviewValidationErrors,
+          salvage: salvageReviewFromMarkdown,
+        });
+        review = verified.result;
+        cost = mergeVerifiedCost(cost, recordCostWithBudget(cwd, verified.usage));
+      } catch (err) {
+        logEvent(cwd, "warn", "Self-verification failed; keeping original review", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   progress(8, STAGES.review, "Review response received");
@@ -357,6 +384,7 @@ export async function executeYooReview(
   if (finalDiffTruncated) review.truncated = true;
   if (finalDroppedFiles.length > 0) review.droppedFiles = finalDroppedFiles;
   if (finalDiffTruncated || finalDroppedFiles.length > 0) {
+    review.contextLimited = true;
     review.suggestions.push(
       "The change is large and some context was omitted. If the review missed something, scope it with --files or increase reviewMaxInputTokens.",
     );

@@ -135,9 +135,13 @@ export interface ReviewBatchInput {
   relevantPaths: string[];
   progress?: ProgressReporter;
   nativeJson?: boolean;
+  enableToolLoop?: boolean;
+  maxToolIterations?: number;
 }
 
-export async function runReviewBatch(input: ReviewBatchInput): Promise<{ review: ReviewResult; usage: UsageCost }> {
+export async function runReviewBatch(
+  input: ReviewBatchInput,
+): Promise<{ review: ReviewResult; usage: UsageCost; system: string; user: string }> {
   const {
     cwd,
     description,
@@ -159,6 +163,8 @@ export async function runReviewBatch(input: ReviewBatchInput): Promise<{ review:
     relevantPaths,
     progress,
     nativeJson,
+    enableToolLoop,
+    maxToolIterations,
   } = input;
 
   const systemPromptEstimate = 1000;
@@ -199,6 +205,8 @@ export async function runReviewBatch(input: ReviewBatchInput): Promise<{ review:
     task: "review",
     structuredOutput: true,
     onStreamProgress: progress ? createStreamProgressCallback(progress, 8, STAGES.review) : undefined,
+    enableToolLoop,
+    maxToolIterations,
   });
 
   const review = parseStructuredResult(cwd, raw, {
@@ -216,5 +224,5 @@ export async function runReviewBatch(input: ReviewBatchInput): Promise<{ review:
     throw new Error("Failed to parse review from secondary model response.");
   }
 
-  return { review, usage };
+  return { review, usage, system, user };
 }

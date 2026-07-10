@@ -17,6 +17,7 @@ import {
   recordCostWithBudget,
   parseStructuredResult,
   createStreamProgressCallback,
+  toolLoopOptions,
 } from "./shared.js";
 import { getSessionContext } from "./review-helpers.js";
 import { getState } from "../session-state.js";
@@ -133,7 +134,15 @@ export async function executeYooTest(
   });
   const fileContents = mapFileContentEntries(fileResult.entries);
 
-  const { system, user } = buildTestPrompt(description, diff, fileContents, testOutput, conventionsText, nativeJson, currentStep);
+  const { system, user } = buildTestPrompt(
+    description,
+    diff,
+    fileContents,
+    testOutput,
+    conventionsText,
+    nativeJson,
+    currentStep,
+  );
   progress(6, STAGES.test, `Calling ${secondaryModelLabel(modelConfig)}…`);
   const { content: raw, usage } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
     signal,
@@ -143,6 +152,7 @@ export async function executeYooTest(
     task: "test",
     structuredOutput: true,
     onStreamProgress: createStreamProgressCallback(progress, 6, STAGES.test),
+    ...toolLoopOptions(config),
   });
 
   progress(7, STAGES.test, "Parsing test result…");

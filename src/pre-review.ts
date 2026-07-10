@@ -81,15 +81,16 @@ export async function runPreReviewCommands(cwd: string, commands: string[]): Pro
         });
         return { command, output: truncateOutput(output), exitCode: 0 };
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         logEvent(cwd, "warn", "Pre-review command failed", {
           command,
-          error: err instanceof Error ? err.message : String(err),
+          error: message,
         });
         const execErr = err as { stdout?: string; stderr?: string; status?: number };
         const output = typeof execErr.stdout === "string" ? execErr.stdout : "";
         const stderr = typeof execErr.stderr === "string" ? execErr.stderr : "";
         const status = typeof execErr.status === "number" ? execErr.status : 1;
-        return { command, output: truncateOutput(`${output}\n${stderr}`), exitCode: status };
+        return { command, output: truncateOutput(`${message}\n${output}\n${stderr}`), exitCode: status };
       }
     }),
   );

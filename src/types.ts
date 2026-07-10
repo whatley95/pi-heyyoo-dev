@@ -27,6 +27,10 @@ export interface HeyyooConfig {
   reviewMaxInputTokens?: number;
   reviewStrategy?: "auto" | "diff-only" | "full-files";
   verifyByDefault?: boolean;
+  /** Run a second model pass that critiques review/judge results for unsupported claims. Default false. */
+  selfVerify?: boolean;
+  /** Allow the secondary model to request file reads or allowlisted commands before answering. Default false. */
+  toolUseLoop?: boolean | number;
   /** Run a separate review call per changed file in parallel. Boolean enables default concurrency; number sets max concurrency. */
   parallelReview?: boolean | number;
   /** Run a deeper project scan by reading representative source files. Boolean enables default sampling; number sets max files to read. */
@@ -84,6 +88,7 @@ export interface ReviewResult {
   autoJudged?: boolean;
   truncated?: boolean;
   droppedFiles?: string[];
+  contextLimited?: boolean;
 }
 
 export interface Approach {
@@ -221,6 +226,10 @@ export interface CallSecondaryModelOptions {
   structuredOutput?: boolean;
   /** Optional callback invoked with accumulated generated text during SDK streaming. */
   onStreamProgress?: (text: string) => void;
+  /** Enable a bounded tool-use loop so the model can request file reads or allowlisted commands before answering. */
+  enableToolLoop?: boolean;
+  /** Maximum tool-use iterations when enableToolLoop is true. Defaults to 3. */
+  maxToolIterations?: number;
 }
 
 export interface MemoryEntry {
@@ -242,6 +251,10 @@ export interface Conventions {
   packageManager?: string;
   entryPoints: string[];
   scripts: string[];
+  /** Exported symbols across the project index (e.g. `src/foo.ts: doThing`). */
+  publicApi?: string[];
+  /** Recurring code patterns inferred from the project index (e.g. `async function`, `try/catch`). */
+  commonPatterns?: string[];
   styleSample?: string;
   agENTSmd?: string;
   generatedAt: string;

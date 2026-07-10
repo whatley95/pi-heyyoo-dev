@@ -4,6 +4,7 @@ import * as ts from "typescript";
 import { filterSourceFiles, listTrackedFiles } from "./conventions.js";
 import { logEvent } from "./logger.js";
 import { getProjectConfigPath } from "./pi-paths.js";
+import type { Conventions } from "./types.js";
 
 export interface SymbolInfo {
   name: string;
@@ -208,6 +209,43 @@ function extractSignature(sourceFile: ts.SourceFile, node: ts.Node): string | un
   }
 }
 
+export interface RelevantFile {
+  file: string;
+  score: number;
+}
+
+export function findRelevantFiles(cwd: string, query: string, maxFiles = 5): RelevantFile[] {
+  const index = loadProjectIndex(cwd);
+  if (!index || index.files.length === 0) return [];
+
+  const words = query
+    .toLowerCase()
+    .split(/[^a-zA-Z0-9_]+/)
+    .filter((w) => w.length > 1);
+  if (words.length === 0) return [];
+
+  const scores = new Map<string, number>();
+  for (const file of index.files) {
+    let score = 0;
+    const lowerFile = file.file.toLowerCase();
+    for (const word of words) {
+      if (lowerFile.includes(word)) score += 1;
+      for (const symbol of file.symbols) {
+        if (symbol.name.toLowerCase().includes(word)) score += 2;
+        if (symbol.signature?.toLowerCase().includes(word)) score += 1;
+      }
+    }
+    if (score > 0) {
+      scores.set(file.file, (scores.get(file.file) ?? 0) + score);
+    }
+  }
+
+  return Array.from(scores.entries())
+    .map(([file, score]) => ({ file, score }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxFiles);
+}
+
 export function formatIndexSummary(index: ProjectIndex, query?: string): string {
   const lines: string[] = [];
   const q = query?.toLowerCase();
@@ -233,4 +271,72 @@ export function formatIndexSummary(index: ProjectIndex, query?: string): string 
   }
   if (lines.length === 0) return q ? `No symbols match "${query}".` : "No symbols indexed.";
   return `Indexed ${totalSymbols} symbol(s) across ${index.files.length} file(s):\n` + lines.join("\n");
+}
+
+export function inferPublicApi(index: ProjectIndex, maxEntries = 50): string[] {
+  const exported: string[] = [];
+  for (const file of index.files) {
+    for (const s of file.symbols) {
+      if (!s.exported) continue;
+      const sig = s.signature ? ` — ${s.signature}` : "";
+      exported.push(`${file.file}:${s.line} ${s.kind} ${s.name}${sig}`);
+    }
+  }
+  return exported.slice(0, maxEntries);
+}
+
+export function inferCommonPatterns(index: ProjectIndex, maxPatterns = 10): string[] {
+  const counts = new Map<string, number>();
+  let totalFunctions = 0;
+  let asyncFunctions = 0;
+  let genericFunctions = 0;
+  let optionalParamFunctions = 0;
+  let exportedCount = 0;
+  let internalCount = 0;
+
+  for (const file of index.files) {
+    for (const s of file.symbols) {
+      if (s.exported) {
+        exportedCount++;
+      } else {
+        internalCount++;
+      }
+      counts.set(s.kind, (counts.get(s.kind) ?? 0) + 1);
+      if (s.kind === "function" || s.kind === "export") {
+        totalFunctions++;
+        if (s.signature) {
+          if (s.signature.startsWith("async ")) asyncFunctions++;
+          if (s.signature.includes("<")) genericFunctions++;
+          if (s.signature.includes("?")) optionalParamFunctions++;
+        }
+      }
+    }
+  }
+
+  const patterns: string[] = [];
+  const sortedKinds = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  const topKinds = sortedKinds.slice(0, 3).map(([kind, count]) => `${count} ${kind}(s)`);
+  if (topKinds.length > 0) patterns.push(`Symbol mix: ${topKinds.join(", ")}`);
+
+  if (totalFunctions > 0) {
+    if (asyncFunctions / totalFunctions >= 0.3) patterns.push("heavy use of async functions");
+    if (genericFunctions / totalFunctions >= 0.2) patterns.push("frequent generic type parameters");
+    if (optionalParamFunctions / totalFunctions >= 0.3) patterns.push("frequent optional parameters");
+  }
+
+  const totalSymbols = exportedCount + internalCount;
+  if (totalSymbols > 0 && exportedCount / totalSymbols >= 0.4) {
+    patterns.push("many exported/public symbols");
+  }
+
+  return patterns.slice(0, maxPatterns);
+}
+
+export function enrichConventionsFromIndex(conventions: Conventions, index: ProjectIndex | null): Conventions {
+  if (!index || index.files.length === 0) return conventions;
+  return {
+    ...conventions,
+    publicApi: inferPublicApi(index),
+    commonPatterns: inferCommonPatterns(index),
+  };
 }

@@ -608,7 +608,12 @@ describe("prompt caching", () => {
       buildRecommendPrompt("situation", [], "conventions"),
       buildTestPrompt("desc", "diff", [], "tests ok", "conventions"),
       buildSecurityPrompt("desc", "diff", [], "conventions"),
-      buildJudgePrompt("desc", [], [], "history", "conventions"),
+      buildJudgePrompt("desc", {
+        planTodo: [],
+        acceptanceCriteria: [],
+        reviewHistory: "history",
+        conventions: "conventions",
+      }),
     ];
 
     for (const prompt of prompts) {
@@ -871,7 +876,14 @@ describe("native JSON prompt instruction", () => {
   });
 
   it("judge prompt uses raw JSON instruction when nativeJson is true", () => {
-    const prompt = buildJudgePrompt("desc", [], [], "history", "conventions", undefined, "", true);
+    const prompt = buildJudgePrompt("desc", {
+      planTodo: [],
+      acceptanceCriteria: [],
+      reviewHistory: "history",
+      conventions: "conventions",
+      memoryContext: "",
+      nativeJson: true,
+    });
     assert.ok(!prompt.system.includes("## Result"));
     assert.ok(prompt.system.includes("Return only valid JSON"));
   });
