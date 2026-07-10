@@ -16,12 +16,14 @@ import {
   validateSecurityResult,
   buildPlanPrompt,
   buildAdaptiveReviewPrompt,
+  buildReviewUserContext,
   buildSuggestPrompt,
   buildScanPrompt,
   buildRecommendPrompt,
   buildTestPrompt,
   buildSecurityPrompt,
   buildJudgePrompt,
+  buildExplainPrompt,
   clearPromptCache,
 } from "./prompts.js";
 
@@ -900,5 +902,123 @@ describe("native JSON prompt instruction", () => {
     const prompt = buildRecommendPrompt("situation", [], "conventions", false, docs);
     assert.ok(prompt.user.includes("<external_docs>"));
     assert.ok(prompt.user.includes('<web_search query="q">'));
+  });
+});
+
+describe("prompt structure contract", () => {
+  function countOccurrences(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  const builders = {
+    plan: () => buildPlanPrompt("task", "conventions", "snapshot"),
+    review: () => buildAdaptiveReviewPrompt("desc", "diff", []),
+    suggest: () => buildSuggestPrompt("question", "conventions"),
+    recommend: () => buildRecommendPrompt("situation", [], "conventions"),
+    judge: () =>
+      buildJudgePrompt("desc", {
+        planTodo: [],
+        acceptanceCriteria: [],
+        reviewHistory: "",
+        conventions: "conventions",
+        memoryContext: "",
+      }),
+    scan: () => buildScanPrompt(),
+    test: () => buildTestPrompt("desc", "diff", [], "ok", "conventions"),
+    security: () => buildSecurityPrompt("desc", "diff", [], "conventions"),
+    explain: () => buildExplainPrompt("target", "context", "conventions"),
+  };
+
+  it("every builder system prompt starts with the shared persona prefix", () => {
+    for (const [name, build] of Object.entries(builders)) {
+      const { system } = build();
+      assert.ok(
+        system.startsWith("You are a senior pair programmer"),
+        `${name} system should start with persona prefix`,
+      );
+    }
+  });
+
+  it("review prompt includes the review rubric and evidence rules", () => {
+    const { system } = builders.review();
+    assert.ok(system.includes("Review rubric"), "review system should include REVIEW_RUBRIC");
+    assert.ok(system.includes("EVIDENCE REQUIREMENTS"), "review system should include EVIDENCE_RULES");
+  });
+
+  it("plan prompt includes the evidence rules", () => {
+    const { system } = builders.plan();
+    assert.ok(system.includes("EVIDENCE REQUIREMENTS"), "plan system should include EVIDENCE_RULES");
+  });
+
+  it("review prompt has no duplicate key block markers", () => {
+    const { system, user } = builders.review();
+    const combined = `${system}\n${user}`;
+    assert.equal(countOccurrences(combined, "EVIDENCE REQUIREMENTS"), 1, "EVIDENCE REQUIREMENTS should appear once");
+    assert.equal(countOccurrences(combined, "Review rubric"), 1, "Review rubric should appear once");
+    assert.equal(countOccurrences(combined, "## Result"), 1, "## Result should appear once");
+  });
+});
+
+describe("buildReviewUserContext (review block assembly)", () => {
+  const base = {
+    description: "fix the bug",
+    diff: "--- a.ts\n+++ b.ts\n@@",
+    fileContents: [] as Array<{ file: string; content: string; mode: "full" | "outline" }>,
+  };
+
+  it("always wraps the diff and includes the description", () => {
+    const user = buildReviewUserContext(base);
+    assert.ok(user.includes("fix the bug"), "description should be present");
+    assert.ok(user.includes("<diff>"), "diff open tag expected");
+    assert.ok(user.includes("</diff>"), "diff close tag expected");
+    assert.ok(user.includes(base.diff), "diff content expected");
+  });
+
+  it("includes each optional block when provided", () => {
+    const user = buildReviewUserContext({
+      ...base,
+      vcs: "git",
+      criteria: "must handle null",
+      currentStep: "step 1",
+      sessionContext: "prior context",
+      conventionsText: "use camelCase",
+      preReviewOutput: "lint clean",
+      memoryContext: "past issue",
+      truncated: true,
+      droppedFiles: ["big.ts"],
+      budgetNote: "budget note",
+    });
+    assert.ok(user.includes("Version control: git"));
+    assert.ok(user.includes("<acceptance_criteria>"));
+    assert.ok(user.includes("Current plan step being reviewed:"));
+    assert.ok(user.includes("<session_context>"));
+    assert.ok(user.includes("<project_conventions>"));
+    assert.ok(user.includes("<pre_review_output>"));
+    assert.ok(user.includes("<memory>"));
+    assert.ok(user.includes("truncated because it was too large"));
+    assert.ok(user.includes("omitted due to token budget: big.ts"));
+    assert.ok(user.includes("budget note"));
+  });
+
+  it("omits optional blocks when not provided", () => {
+    const user = buildReviewUserContext(base);
+    assert.ok(!user.includes("Version control:"));
+    assert.ok(!user.includes("<acceptance_criteria>"));
+    assert.ok(!user.includes("Current plan step being reviewed:"));
+    assert.ok(!user.includes("<session_context>"));
+    assert.ok(!user.includes("<project_conventions>"));
+    assert.ok(!user.includes("<pre_review_output>"));
+    assert.ok(!user.includes("<memory>"));
+    assert.ok(!user.includes("omitted due to token budget"));
+  });
+
+  it("includes full file contents when provided", () => {
+    const user = buildReviewUserContext({
+      ...base,
+      fileContents: [{ file: "src/a.ts", content: "const x = 1;", mode: "full" }],
+    });
+    assert.ok(user.includes("<file_contents>"));
+    assert.ok(user.includes("src/a.ts"));
+    assert.ok(user.includes("const x = 1;"));
   });
 });

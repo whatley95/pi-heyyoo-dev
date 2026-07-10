@@ -164,6 +164,68 @@ export interface FileContentContext {
   mode: "full" | "outline";
 }
 
+export function buildReviewUserContext(args: {
+  description: string;
+  diff: string;
+  fileContents: FileContentContext[];
+  vcs?: string;
+  criteria?: string;
+  currentStep?: string;
+  sessionContext?: string;
+  conventionsText?: string;
+  preReviewOutput?: string;
+  memoryContext?: string;
+  truncated?: boolean;
+  droppedFiles?: string[];
+  budgetNote?: string;
+}): string {
+  const {
+    description,
+    diff,
+    fileContents,
+    vcs,
+    criteria,
+    currentStep,
+    sessionContext,
+    conventionsText,
+    preReviewOutput,
+    memoryContext,
+    truncated,
+    droppedFiles,
+    budgetNote,
+  } = args;
+
+  const criteriaBlock = criteria ? `\n\n<acceptance_criteria>\n${criteria}\n</acceptance_criteria>` : "";
+  const currentStepBlock = currentStep ? `\n\nCurrent plan step being reviewed:\n${currentStep}` : "";
+  const sessionBlock = sessionContext ? `\n\n<session_context>\n${sessionContext}\n</session_context>` : "";
+  const conventionsBlock = conventionsText
+    ? `\n\n<project_conventions>\n${conventionsText}\n</project_conventions>`
+    : "";
+  const preReviewBlock = preReviewOutput ? `\n\n<pre_review_output>\n${preReviewOutput}\n</pre_review_output>` : "";
+  const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
+
+  const fileContentsBlock =
+    fileContents.length > 0
+      ? `\n\n<file_contents>\n${fileContents
+          .map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`)
+          .join("\n\n")}\n</file_contents>`
+      : "";
+
+  const droppedBlock =
+    droppedFiles && droppedFiles.length > 0
+      ? `\n\n⚠️ Some changed files were omitted due to token budget: ${droppedFiles.join(", ")}`
+      : "";
+
+  const truncationNotice = truncated
+    ? "\n\n⚠️ NOTE: The diff was truncated because it was too large. Review only what's visible."
+    : "";
+
+  const budgetBlock = budgetNote ? `\n\n${budgetNote}` : "";
+  const vcsLine = vcs ? `\n\nVersion control: ${vcs}` : "";
+
+  return `Review this code change. The developer says:\n\n${description}${vcsLine}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}${droppedBlock}${budgetBlock}`;
+}
+
 function buildAdaptiveReviewPromptImpl(
   description: string,
   diff: string,
@@ -195,34 +257,6 @@ function buildAdaptiveReviewPromptImpl(
     budgetNote,
     nativeJson,
   } = options;
-
-  const criteriaBlock = criteria ? `\n\n<acceptance_criteria>\n${criteria}\n</acceptance_criteria>` : "";
-  const currentStepBlock = currentStep ? `\n\nCurrent plan step being reviewed:\n${currentStep}` : "";
-  const sessionBlock = sessionContext ? `\n\n<session_context>\n${sessionContext}\n</session_context>` : "";
-  const conventionsBlock = conventionsText
-    ? `\n\n<project_conventions>\n${conventionsText}\n</project_conventions>`
-    : "";
-  const preReviewBlock = preReviewOutput ? `\n\n<pre_review_output>\n${preReviewOutput}\n</pre_review_output>` : "";
-  const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
-
-  const fileContentsBlock =
-    fileContents.length > 0
-      ? `\n\n<file_contents>\n${fileContents
-          .map((f) => `--- ${f.file} (${f.mode}) ---\n${f.content}`)
-          .join("\n\n")}\n</file_contents>`
-      : "";
-
-  const droppedBlock =
-    droppedFiles && droppedFiles.length > 0
-      ? `\n\n⚠️ Some changed files were omitted due to token budget: ${droppedFiles.join(", ")}`
-      : "";
-
-  const truncationNotice = truncated
-    ? "\n\n⚠️ NOTE: The diff was truncated because it was too large. Review only what's visible."
-    : "";
-
-  const budgetBlock = budgetNote ? `\n\n${budgetNote}` : "";
-  const vcsLine = vcs ? `\n\nVersion control: ${vcs}` : "";
 
   return {
     system: `${COMMON_SYSTEM_PREFIX}
@@ -264,7 +298,21 @@ Rules:
 - Be strict but fair — flag real problems, not preferences
 ${EVIDENCE_RULES}`,
 
-    user: `Review this code change. The developer says:\n\n${description}${vcsLine}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}${droppedBlock}${budgetBlock}`,
+    user: buildReviewUserContext({
+      description,
+      diff,
+      fileContents,
+      vcs,
+      criteria,
+      currentStep,
+      sessionContext,
+      conventionsText,
+      preReviewOutput,
+      memoryContext,
+      truncated,
+      droppedFiles,
+      budgetNote,
+    }),
   };
 }
 

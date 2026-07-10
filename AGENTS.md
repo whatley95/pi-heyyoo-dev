@@ -16,14 +16,30 @@ This file is written for AI coding agents. It assumes no prior knowledge of the 
 
 ### What the extension exposes
 
-| Surface                             | Purpose                                                                                        |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Tool `yoo`                          | Main API used by the primary agent: `plan`, `review`, `suggest`, `recommend`, `judge`, `scan`. |
-| Command `/yoo`                      | Run actions or show status from the terminal.                                                  |
-| Commands `/yoo-status`, `/yoo-info` | Detailed diagnostics.                                                                          |
-| Command `/yoo-model`                | Interactively pick the secondary model and write it to `~/.pi/agent/settings.json`.            |
-| Command `/yoo-config`               | Guidance for configuring the secondary model.                                                  |
-| Command `/yoo-clear`                | Clear plan, session state, cost tracking, memory, and conventions.                             |
+**Tool `yoo`** — the main API used by the primary agent. Actions: `plan`, `review`, `suggest`, `recommend`, `judge`, `scan`, `test`, `security`.
+
+**Slash commands** registered in the Pi terminal:
+
+| Command                | Purpose                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/yoo`                 | Run an action or show status: `/yoo <plan|review|suggest|recommend|judge|scan|test|security|status> [args]`. |
+| `/yoo-status`, `/yoo-info` | Detailed diagnostics; `/yoo-info` is an alias for `/yoo-status`.                                  |
+| `/yoo-model`           | Interactively pick the secondary model (optionally per tool) and write it to `~/.pi/agent/settings.json`. |
+| `/yoo-config`          | View/edit pi-heyyoo settings: `/yoo-config <get|set|list> [key] [value]` or shorthand `/yoo-config <provider.model>`. |
+| `/yoo-clear`           | Clear the active plan, state, cost, memory, conventions, learned facts, loop history, and inherited session. |
+| `/yoo-clear-logs`      | Clear the per-project yoo error/event log.                                                            |
+| `/yoo-index`           | Read stored yoo project context (`all`, `plan`, `memory`, `conventions`, `cost`, `logs`, `index`, `learned`; `--update` rebuilds the index). |
+| `/yoo-explain`         | Explain code, an error, or a file via the secondary model.                                           |
+| `/yoo-learn`           | Record or verify project facts for future sessions (`/yoo-learn <fact>` or `--verify`).             |
+| `/yoo-search`          | Web search via the configured provider (DuckDuckGo/Brave).                                           |
+| `/yoo-search-config`   | Configure the web search provider and save the Brave API key to `auth.json`.                         |
+| `/yoo-next`            | Recommend the next step based on the active plan.                                                    |
+| `/yoo-done`            | Mark the current plan step complete and recommend the next step.                                     |
+| `/yoo-logs`            | Show recent yoo error/event log entries for this project.                                            |
+| `/yoo-test`            | Test connectivity to the configured secondary model(s); an optional task name scopes the check.     |
+| `/yoo-scan`            | Alias for `/yoo scan` — scan project conventions.                                                    |
+| `/yoo-scan-deep`       | Run `/yoo scan` with deep source-file sampling.                                                      |
+| `/yoo-backend`         | Switch the secondary model backend: `sdk` (default), `pi`, or `http`.                                |
 
 ---
 
@@ -53,52 +69,122 @@ pi-heyyoo/
 ├── scripts/
 │   └── bump-version.js   # Semver bump helper (patch/minor/major)
 └── src/
-    ├── index.ts          # Extension entry: registers tools/commands, orchestrates actions
-    ├── types.ts          # Domain types and interfaces
-    ├── config.ts         # Load merged global + project config
-    ├── secondary-model.ts# Provider map and HTTP calls to secondary LLMs
-    ├── auth-reader.ts    # Resolve API keys from auth.json / env / commands
-    ├── prompts.ts        # Prompt builders and JSON result validators
+    ├── index.ts          # Extension entry: registers the yoo tool + all /yoo-* commands, orchestrates
+    ├── types.ts          # Domain types/interfaces; re-exports backend types from types/secondary-model.ts
+    ├── schemas.ts        # TypeBox schemas for structured results (plan steps, review/security, ...)
+    ├── config.ts         # Load merged global + project config; resolve secondary settings and task-model overrides
+    ├── secondary-model.ts# Entry point for model calls; key resolution, budget, backend dispatch, tool-loop
+    ├── auth-reader.ts    # Resolve API keys from auth.json / env / commands (with !command, $ENV indirection)
+    ├── prompts.ts        # Prompt builders and JSON result validators/salvagers
     ├── diff-grabber.ts   # Git/SVN diff collection and VCS info
-    ├── plan-store.ts     # Persist plan/session state to disk
-    ├── conventions.ts    # Scan project conventions and persist them
-    ├── review-memory.ts  # Track recent issues per file for regression prompts
-    ├── cost-tracker.ts   # Estimate, record, and budget secondary-model spend
-    ├── loop-detector.ts  # Detect review-fix loops and emit steer messages
-    ├── pre-review.ts     # Run configured pre-review shell commands
-    ├── render.ts         # TUI call/result rendering for Pi
-    ├── progress.ts       # Status/progress reporting helpers
     ├── file-loader.ts    # Load changed file contents within token budget
-    ├── token-budget.ts   # Calculate review token budgets from model info
+    ├── token-budget.ts   # Calculate per-action review token budgets
     ├── model-registry.ts # Known secondary model context windows and output limits
+    ├── conventions.ts    # Scan project conventions and persist them; also filters source files for indexing
+    ├── project-index.ts  # Build a TypeScript AST symbol index of the project (SymbolInfo)
+    ├── project-snapshot.ts # Assemble a token-bounded project snapshot for plan/context prompts
+    ├── plan-store.ts     # Persist plan/session state to disk
+    ├── session-state.ts  # In-memory per-cwd session state map (completed steps, review rounds)
+    ├── review-memory.ts  # Track recent issues per file for regression prompts
+    ├── cost-tracker.ts   # Estimate, record, reserve/release, and budget secondary-model spend
+    ├── loop-detector.ts  # Detect review-fix loops and emit steer messages
+    ├── tool-loop.ts      # Let the model request read_file/run_command tools (path-secure, pre-review guarded)
+    ├── pre-review.ts     # Run configured pre-review shell commands (restricted interpreters/eval flags)
+    ├── render.ts         # TUI call/result rendering for Pi
+    ├── progress.ts       # Status/progress reporting helpers for the Pi TUI
+    ├── path-security.ts  # Validate safe relative paths (path-traversal guard)
     ├── pi-paths.ts       # Resolve Pi agent and project config paths
     ├── logger.ts         # Per-project event/error log
-    ├── yoo-search.ts          # /yoo-search terminal command handler
-    ├── yoo-search-config.ts   # /yoo-search-config terminal command handler
-    ├── yoo-tool-params.ts # Validation for the main yoo tool parameters
-    └── types/stubs/      # Ambient declarations for peer dependencies
-        ├── pi-peer-deps.d.ts
-        └── pi-tui.d.ts
+    ├── version.ts        # Exposes VERSION and HOMEPAGE read from package.json
+    ├── doc-fetcher.ts    # Fetch web/doc context for search and explain
+    ├── format.ts         # Format yoo tool results into markdown text for the Pi TUI
+    ├── yoo-tool-params.ts# Validation for the main yoo tool parameters
+    ├── yoo-explain.ts    # /yoo-explain terminal command handler
+    ├── yoo-index.ts      # /yoo-index terminal command handler
+    ├── yoo-learn.ts      # /yoo-learn terminal command handler
+    ├── yoo-search.ts     # /yoo-search terminal command handler
+    ├── yoo-search-config.ts # /yoo-search-config terminal command handler
+    ├── actions/          # One executor per yoo action + shared helpers
+    │   ├── plan.ts       #   plan action executor
+    │   ├── review.ts     #   review action executor
+    │   ├── suggest.ts    #   suggest action executor
+    │   ├── recommend.ts  #   recommend action executor
+    │   ├── judge.ts      #   judge action executor
+    │   ├── scan.ts       #   scan action executor
+    │   ├── test.ts       #   test action executor
+    │   ├── security.ts   #   security action executor
+    │   ├── review-helpers.ts # shared review prompt assembly, budget, result handling
+    │   ├── verify.ts     #   secondary-model self-verification loop for structured results
+    │   └── shared.ts     #   cross-action helpers: STAGES, cost recording, JSON parsing, usage merging
+    ├── commands/         # Terminal command helpers (argument parsers + registration)
+    │   ├── arg-parsers.ts # parseReviewCommandArgs / parseTestCommandArgs / parseSecurityCommandArgs
+    │   └── register.ts    # Registers all /yoo-* slash commands and delegates to the action executors
+    ├── backends/         # Pluggable model-call backends
+    │   ├── backend-resolver.ts # pick backend; resolve SDK catalog metadata for token budgets
+    │   ├── sdk-backend.ts #   Pi pi-ai SDK (default): headers, retries, caching, thinking mapping
+    │   ├── http-backend.ts #  direct provider HTTP for custom baseUrl / backend:"http"
+    │   ├── pi-backend.ts #    spawn the Pi CLI for fallback or backend:"pi"
+    │   ├── provider-api.ts #   backend interface/types
+    │   ├── shared.ts     #   shared backend helpers
+    │   └── index.ts      #   backend registry
+    └── types/            # Shared ambient/public types
+        ├── docs.ts       #   doc-source configuration types
+        ├── secondary-model.ts # backend/SDK option types
+        └── stubs/        # Ambient declarations for peer dependencies
+            ├── pi-ai.d.ts
+            ├── pi-peer-deps.d.ts
+            └── pi-tui.d.ts
 ```
 
 ### Module responsibilities
 
-- **`index.ts`** — Main orchestrator. Holds per-`cwd` session state in memory, wires tool/command handlers, formats final text output, and integrates all submodules.
-- **`secondary-model.ts`** — Entry point for secondary model calls; resolves task model overrides, enforces the cost budget, and dispatches to the appropriate backend.
-- **`backends/`** — Three interchangeable backends for model calls:
-  - `sdk-backend.ts` — Pi's `pi-ai` SDK (default); handles provider attribution headers, retries, caching, and thinking-level mapping.
+- **`index.ts`** — Extension entry and main wiring. Wires the Pi session lifecycle (`session_start`/`session_shutdown`/`tool_execution_start`), registers the `yoo` tool, and delegates all `/yoo-*` slash-command registration to `registerYooCommands` (see `commands/register.ts`). Holds the per-`cwd` loop-detection state.
+- **`types.ts`** — Domain types and interfaces (`YooAction`, `YooModelTask`, `HeyyooConfig`, ...); re-exports backend types from `types/secondary-model.ts`.
+- **`schemas.ts`** — TypeBox schemas for structured results (plan steps, review/security results, etc.).
+- **`config.ts`** — Loads merged global + project config; validates and resolves `secondary` settings, task-model overrides, and `DocsConfig`.
+- **`secondary-model.ts`** — Entry point for secondary model calls; resolves the API key, enforces the cost budget, dispatches to the chosen backend, and runs the tool-loop when the model requests `read_file`/`run_command`.
+- **`backends/`** — Pluggable model-call backends:
+  - `sdk-backend.ts` — Pi's `pi-ai` SDK (default); provider attribution headers, retries, caching, thinking-level mapping.
   - `http-backend.ts` — Direct provider HTTP for custom `baseUrl` or explicit `backend: "http"`.
   - `pi-backend.ts` — Spawns the Pi CLI for fallback or explicit `backend: "pi"`.
   - `backend-resolver.ts` — Picks the backend and resolves SDK catalog metadata for token budgets.
+  - `provider-api.ts` / `shared.ts` / `index.ts` — backend interface/types, shared helpers, and the backend registry.
 - **`auth-reader.ts`** — Reads `~/.pi/agent/auth.json`, then falls back to environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). Supports `!command`, `$ENV`, and `${ENV}` key indirection.
-- **`prompts.ts`** — Builds system/user prompts for each action and validates the JSON the model returns.
+- **`prompts.ts`** — Builds system/user prompts for each action and validates/salvages the JSON the model returns.
 - **`diff-grabber.ts`** — Uses `git diff` / `svn diff`. Supports `files`, `exclude`, `revision`, `since`, `untracked`. Truncates diffs to ~6,000 chars.
-- **`conventions.ts`** — Static heuristics over the tracked file list plus an LLM pass; stores conventions in `.pi/heyyoo/conventions.json`.
-- **`cost-tracker.ts` / `plan-store.ts` / `review-memory.ts`** — Persistent state under `.pi/heyyoo/`.
+- **`file-loader.ts`** — Loads changed file contents within the token budget.
+- **`token-budget.ts` / `model-registry.ts`** — Model context/output limits and per-action review token budgets.
+- **`conventions.ts`** — Static heuristics over the tracked file list plus an LLM pass; stores conventions in `.pi/heyyoo/conventions.json`. Also provides `filterSourceFiles` / `listTrackedFiles` reused by indexing.
+- **`project-index.ts`** — Builds a TypeScript AST symbol index of the project (`SymbolInfo`); persisted and reused by explain/suggest/recommend.
+- **`project-snapshot.ts`** — Assembles a token-bounded project snapshot (tracked files, package.json, doc samples, index symbols) for plan/context prompts.
+- **`plan-store.ts` / `session-state.ts`** — Persist plan/session state to disk and keep an in-memory per-`cwd` state map (completed steps, review rounds).
+- **`review-memory.ts`** — Tracks recent issues per file for regression prompts.
+- **`cost-tracker.ts`** — Estimates, records, reserves/releases, and budgets secondary-model spend.
 - **`loop-detector.ts`** — Watches recent tool calls and emits a steer message when `yoo.review`/`yoo.judge` repeats without real edits.
-- **`yoo-search.ts`** — Handles the `/yoo-search` terminal command: validates the query, checks `pi-heyyoo.docs.webSearch.enabled`, runs web search via `doc-fetcher.ts`, and formats raw results.
-- **`yoo-search-config.ts`** — Handles the `/yoo-search-config` terminal command: lets the user pick DuckDuckGo or Brave Search, and saves the Brave API key to `~/.pi/agent/auth.json` when provided inline.
+- **`tool-loop.ts`** — Lets the secondary model request `read_file`/`run_command` tools to answer questions, with path-security and pre-review guards.
+- **`pre-review.ts`** — Runs configured pre-review shell commands (interpreter commands restricted to relative scripts; inline-eval flags rejected) and formats output.
+- **`render.ts`** — TUI call/result rendering for Pi.
+- **`progress.ts`** — Status/progress reporting helpers for the Pi TUI.
+- **`path-security.ts`** — Validates safe relative paths (path-traversal guard) for project file access.
+- **`pi-paths.ts`** — Resolves Pi agent and project config paths.
+- **`logger.ts`** — Per-project event/error log under `.pi/heyyoo/`.
+- **`doc-fetcher.ts`** — Fetches web/doc context for `/yoo-search` and `/yoo-explain`.
+- **`format.ts`** — Formats `YooToolResult` into the markdown text shown in the Pi TUI (`formatResultText`, plus `issueEmoji` / `formatModelSuffix` helpers).
 - **`yoo-tool-params.ts`** — Validates the main `yoo` tool parameter object, resolves the requested action, and strips/ignores disallowed fields such as the removed `search` parameter.
+- **`version.ts`** — Reads `VERSION` and `HOMEPAGE` from `package.json` so both `index.ts` and `commands/register.ts` share one source.
+- **`commands/arg-parsers.ts`** — Pure string parsers that turn `/yoo review|test|security` command-line args into structured options objects.
+- **`commands/register.ts`** — Registers every `/yoo-*` slash command (handlers plus `showYooStatus`); each handler validates args, calls the relevant `actions/` executor or `yoo-*` module, and renders the result with `formatResultText`. This is what keeps `index.ts` as pure wiring/export.
+- **`actions/`** — One executor per `yoo` action plus shared helpers:
+  - `plan.ts`, `review.ts`, `suggest.ts`, `recommend.ts`, `judge.ts`, `scan.ts`, `test.ts`, `security.ts` — action executors wiring config, prompts, diff/file loading, cost, and progress.
+  - `review-helpers.ts` — Shared review prompt assembly, budget, and result handling.
+  - `verify.ts` — Secondary-model self-verification loop for structured results.
+  - `shared.ts` — Cross-action helpers: `STAGES`, cost recording, JSON parsing, usage merging.
+- **`yoo-explain.ts`** — Handles `/yoo-explain`: explains code/error/file with the secondary model (optional doc context).
+- **`yoo-index.ts`** — Handles `/yoo-index`: reads stored project context (plan, memory, conventions, cost, logs, index, learned).
+- **`yoo-learn.ts`** — Handles `/yoo-learn`: records/verifies project facts for future sessions.
+- **`yoo-search.ts`** — Handles `/yoo-search`: validates the query, checks `pi-heyyoo.docs.webSearch.enabled`, runs web search via `doc-fetcher.ts`, and formats raw results.
+- **`yoo-search-config.ts`** — Handles `/yoo-search-config`: lets the user pick DuckDuckGo or Brave Search, and saves the Brave API key to `~/.pi/agent/auth.json` when provided inline.
+- **`types/`** — Shared types: `docs.ts` (doc sources), `secondary-model.ts` (backend/SDK types), and `stubs/` ambient declarations (`pi-ai.d.ts`, `pi-peer-deps.d.ts`, `pi-tui.d.ts`).
 
 ---
 
@@ -279,7 +365,7 @@ The extension stores per-project runtime data under `.pi/heyyoo/`:
 - The package is consumed by Pi, not by end-users directly. Pi resolves it as an extension via `"pi": { "extensions": ["./src/index.ts"] }` in `package.json`.
 - The `files` array publishes only `src/` and `README.md`.
 - Version bumps are done with `npm run bump:patch|minor|major`, which edits `package.json` in place.
-- There are no CI workflows, Docker files, or deployment scripts in this repository.
+- CI runs `typecheck`, `lint`, `test`, and `format:check` on push and pull requests via `.github/workflows/ci.yml`. There are no Docker files or deployment scripts in this repository.
 
 ---
 
