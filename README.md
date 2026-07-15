@@ -186,9 +186,13 @@ The `yoo` tool is called by the main agent during development:
 | `yoo({ scan: true })`                                                 | Once per project               | Learns project conventions and architecture                         |
 | `yoo({ test: "added payment service" })`                              | After code changes             | Checks for failing tests, missing tests, and test-quality issues    |
 | `yoo({ security: "auth changes" })`                                   | Security-sensitive changes     | Audits diff for secrets, injection, auth, and other vulnerabilities |
+| `yoo({ done: true })`                                                 | After completing a step        | Mark the current plan step complete; use a number or `"all"` to mark multiple steps |
+| `yoo({ planUpdate: "new task description" })`                         | When plan becomes stale        | Regenerate the active plan; already-completed progress is preserved |
 | `yoo({ review: "...", verify: true })`                                | Any high-stakes result         | Asks the main agent to confirm or refute the finding with evidence  |
 
 Plan steps can include `priority` (`high`, `medium`, `low`) and `dependsOn` (1-based list of earlier steps). Plain-string steps still work for backward compatibility.
+
+**Plan tracker.** yoo tracks file edits and sends a workflow reminder after 3+ edits without a `yoo.review` or `yoo.done` call, so the plan tracker stays in sync. Review automatically advances the plan by the number of steps the model reports as completed (`completedSteps`).
 
 ### `yoo_index` tool
 
@@ -275,7 +279,10 @@ Recorded facts appear in `yoo_index({ topic: "learned" })`.
 | `/yoo-backend <sdk\|pi\|http>`                 | Switch secondary model backend (default: `sdk`)                                        |
 | `/yoo-clear`                                   | Clear the current session's plan, state, cost, memory, and conventions                 |
 | `/yoo-next`                                    | Recommend the next step based on the active plan                                       |
-| `/yoo-done`                                    | Mark the current plan step complete and recommend the next step                        |
+| `/yoo-done [description]`                      | Mark the current plan step complete and recommend the next step                        |
+| `/yoo-done 3`                                  | Mark steps 1–3 complete                                                                |
+| `/yoo-done all`                                | Mark all steps complete                                                                |
+| `/yoo-plan-update <new task description>`      | Regenerate the active plan; already-completed progress is preserved                    |
 | `/yoo-logs`                                    | Show recent error/event log entries for this project                                   |
 | `/yoo-clear-logs`                              | Clear the yoo error/event log for this project                                         |
 
@@ -322,20 +329,24 @@ yoo.plan("refactor auth")
 yoo.scan()
   → learns project conventions and architecture
 
+[implement step 1]
+
+yoo.done()                                        # mark step 1 complete
 yoo.review("wrote verifySession middleware")
   → git diff → secondary model
   → verdict: "needs-work" — 2 issues found
-  → Progress: 0/5 steps done
+  → Progress: 1/5 steps done
 
   [fix issues...]
 
 yoo.review("fixed error handling")
   → verdict: "pass" — consensus ✓
-  → Progress: 1/5 steps done
+  → Progress: 2/5 steps done
   → Next: migrate login route
 
-  [next step...]
+  [implement steps 2–5 in one edit]
 
+yoo.done("all")                                   # mark remaining steps complete
 yoo.review("migrated all routes")
   → verdict: "pass" — consensus ✓
   → Progress: 5/5 steps done
@@ -345,6 +356,8 @@ yoo.judge("auth refactor complete")
   → final review against plan + review history
   → verdict: "pass" — all work complete ✓
 ```
+
+If the implementation diverges from the original plan, yoo flags the plan as stale in review/judge output and you can regenerate it with `yoo({ planUpdate: "..." })` or `/yoo-plan-update`. The tracker resets cleanly when a new plan is created.
 
 ### Review escalation
 
@@ -444,7 +457,7 @@ SDK backend defaults mirror the main Pi agent: `cacheRetention: "short"`, `maxRe
 
 **Streaming progress:** For SDK backend calls, generated text is streamed to the TUI so long `suggest`, `plan`, `review`, and other operations show live progress instead of waiting silently.
 
-**Auto-detect:** When no `backend` is explicitly set, pi-heyyoo uses the `sdk` backend for all providers. Direct HTTP is used only when `secondary.baseUrl` is set or when `secondary.backend` is explicitly `"http"`. Set `secondary.backend` to `"sdk"`, `"pi"`, or `"http"` to override.
+**Auto-detect:** When no `backend` is explicitly set, pi-heyyoo uses the `sdk` backend for all providers. If the requested model is not in Pi's built-in SDK catalog (e.g. extension-registered providers like `pi-cursor-provider`), it automatically falls back to the `pi` backend. Direct HTTP is used only when `secondary.baseUrl` is set or when `secondary.backend` is explicitly `"http"`. Set `secondary.backend` to `"sdk"`, `"pi"`, or `"http"` to override.
 
 You can also use **any OpenAI-compatible or Anthropic-compatible endpoint** by setting `secondary.baseUrl`. Set `secondary.style` to `"anthropic"` for Anthropic-style endpoints.
 
