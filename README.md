@@ -438,7 +438,7 @@ When the user asks a technical or architectural question, call `yoo.suggest` or 
 
 SDK backend defaults mirror the main Pi agent: `cacheRetention: "short"`, `maxRetries: 3`, and `timeoutMs: 300000`. For `opencode`/`opencode-go` calls, pi-heyyoo also sends the `x-opencode-session` and `x-opencode-client: pi` attribution headers when a session id is available.
 
-**Credential resolution:** The SDK backend first uses pi-heyyoo's own key lookup (`secondary.apiKey` → `~/.pi/agent/auth.json` → environment variables → `!command` execution). If no explicit key is found, it falls back to the `pi-ai` SDK's credential resolution, which can read Pi's `CredentialStore` (e.g. `~/.pi/agent/auth.json`) and provider env vars. This means yoo often works without any extra key configuration if the main Pi agent is already set up.
+**Credential resolution:** The SDK backend first uses pi-heyyoo's own key lookup (`secondary.apiKey` → `~/.pi/agent/auth.json` → environment variables → `!command` execution). OAuth credentials stored by Pi's `/login` command (e.g. OpenAI Codex, GitHub Copilot, Anthropic Claude Pro/Max) are detected by their `type: "oauth"` entry and resolved/refreshed via the `pi-ai` SDK's `getOAuthApiKey`. If no explicit credential is found, it falls back to the SDK's own credential resolution. This means yoo often works without any extra key configuration if the main Pi agent is already set up.
 
 **Transient-failure fallback:** If the SDK backend fails with a retryable provider error (5xx, rate limit, network timeout), pi-heyyoo automatically falls back to the `pi` backend once before giving up.
 
@@ -461,7 +461,7 @@ You can also use **any OpenAI-compatible or Anthropic-compatible endpoint** by s
 }
 ```
 
-API keys are resolved in order: `secondary.apiKey` → `~/.pi/agent/auth.json` → environment variables → `!command` execution. For Anthropic, `ANTHROPIC_OAUTH_TOKEN` is checked before `ANTHROPIC_API_KEY` (matching Pi's precedence).
+Credentials are resolved in order: `secondary.apiKey` → `~/.pi/agent/auth.json` (API-key or OAuth entries) → environment variables → `!command` execution. For Anthropic, `ANTHROPIC_OAUTH_TOKEN` is checked before `ANTHROPIC_API_KEY` (matching Pi's precedence).
 
 ## Development scripts
 
