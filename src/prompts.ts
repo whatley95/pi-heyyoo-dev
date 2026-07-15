@@ -88,8 +88,8 @@ Rules:
 - dependsOn is a 1-based list of earlier step numbers this step cannot start until after
 - acceptance criteria must be testable (specific checks, not vague goals)
 - Each todo item should be one small unit of work — the main agent should complete it in 1-2 turns
-- Maximum 5-8 todo items
-- Maximum 5 acceptance criteria
+- Aim for 5-8 todo items (more is acceptable for large refactors, but keep steps small and actionable)
+- Aim for 5 acceptance criteria
 - Stay scoped to the requested task; do not add unrelated refactoring, cleanup, or extra features
 - Respect the project conventions shown above when choosing file names, structure, and patterns
 - Use the project snapshot to ground the plan in the actual codebase. Prefer existing file paths/patterns from the snapshot. If a step requires a new file, explain why.
@@ -105,7 +105,7 @@ const REVIEW_RUBRIC = `Review rubric — check ALL of the following categories:
 2. IMPORTS & REFERENCES: Broken imports, undefined variables, wrong exports, missing module references
 3. CONVENTIONS: Violates project naming patterns, file structure, or coding style
 4. LOGIC: Type mismatches, race conditions, off-by-one errors, incorrect assumptions
-5. COMPLETENESS: Does the code actually implement what was described? Are all acceptance criteria met?
+5. COMPLETENESS: Does the code actually implement what was described? Are all acceptance criteria met? If the description or plan contradicts the actual code, trust the code and treat the plan as stale.
 
 For each issue found, provide a concrete, actionable fix suggestion. Do NOT suggest fixes that you cannot derive from the code shown.`;
 
@@ -628,7 +628,7 @@ You are performing a final holistic review of completed work before the develope
 ${REVIEW_RUBRIC}
 
 Additionally, check:
-6. PLAN COMPLETENESS: Does the completed work satisfy all items in the original plan?
+6. PLAN COMPLETENESS: Does the completed work satisfy all items in the original plan? If the original plan contradicts the final code and the code is internally consistent, the plan is stale — judge the code on its own merits and note that the plan should be updated.
 7. REVIEW HISTORY: Look at the review_history below. Every plan step should have been reviewed and passed before judging. If ANY step was not reviewed, that is a blocking issue.
 8. COHERENCE: Do all pieces work together? Is there anything contradictory?
 
@@ -651,6 +651,7 @@ Rules:
 - "consensus" is true only when verdict is "pass" AND issues is empty
 - Provide a real summary that captures the overall quality, not filler
 - Judge only against the original plan and acceptance criteria; do not introduce new requirements that were not part of the plan
+- If the original plan contradicts the actual code and the code is internally consistent, treat the plan as stale. Judge the code on its own merits and note that the plan should be updated.
 - If any plan step is incomplete or unreviewed, that's a medium-severity issue
 - Check the review_history — unreviewed steps are blocking
 - When the diff/file contents are truncated, do not treat missing context as a defect; judge only what is shown
