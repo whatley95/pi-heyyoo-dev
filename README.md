@@ -345,24 +345,61 @@ Logged events include secondary model errors, parse failures (with a raw respons
 ## Process flow
 
 ```mermaid
-flowchart TD
-    A[yoo.plan<br/>create plan] --> B[yoo.scan<br/>learn conventions]
-    B --> C{Plan active?}
-    C -->|yes| D[Implement current step]
-    C -->|no| Z[Done]
-    D --> E[yoo.done<br/>mark step complete]
-    E -->|verified against diff| F[yoo.review<br/>review changes]
-    F -->|needs-work| G[Fix issues]
-    F -->|pass| H[Tracker auto-advances]
-    G --> F
-    H --> I{More steps?}
-    I -->|yes| D
-    I -->|no| J[yoo.judge<br/>final review]
-    J -->|pass| K[Judge auto-syncs tracker]
-    J -->|plan stale| L[yoo.planUpdate<br/>regenerate plan]
-    K --> Z
-    L --> D
-    J -->|needs-work| G
+sequenceDiagram
+    autonumber
+    participant MA as Main Agent (Pi)
+    participant Yoo as yoo extension
+    participant SM as Secondary model
+
+    rect rgb(230, 245, 255)
+        MA->>Yoo: yoo.plan("refactor auth")
+        Yoo->>SM: generate plan + acceptance criteria
+        SM-->>Yoo: todo list
+        Yoo-->>MA: Plan: 5 steps
+    end
+
+    MA->>Yoo: yoo.scan()
+    Yoo->>SM: learn conventions
+    SM-->>Yoo: project context
+    Yoo-->>MA: conventions cached
+
+    loop Per step
+        MA->>MA: implement step N
+        MA->>Yoo: yoo.done()
+        Yoo->>SM: verify diff satisfies step
+        SM-->>Yoo: verified / not verified
+        alt verification passes
+            Yoo-->>MA: Step N done ✓
+        else verification fails
+            Yoo-->>MA: keep working
+        end
+
+        MA->>Yoo: yoo.review("...")
+        Yoo->>SM: review git diff
+        SM-->>Yoo: verdict + issues + fixPlan
+        alt needs-work
+            Yoo-->>MA: issues + fix plan
+            MA->>MA: fix issues
+        else pass
+            Yoo-->>MA: pass + progress + next step
+        end
+    end
+
+    rect rgb(255, 245, 230)
+        MA->>Yoo: yoo.judge("...")
+        Yoo->>SM: holistic final review
+        SM-->>Yoo: verdict + completedStepIds
+        alt pass
+            Yoo->>Yoo: auto-sync tracker
+            Yoo-->>MA: all done ✓
+        else plan stale
+            Yoo-->>MA: plan stale — run yoo.planUpdate
+            MA->>Yoo: yoo.planUpdate("...")
+            Yoo-->>MA: updated plan
+        else needs-work
+            Yoo-->>MA: fix remaining issues
+        end
+    end
 ```
 
 Typical tool sequence:
