@@ -35,4 +35,35 @@ describe("review-memory", () => {
     rmSync(cwd, { recursive: true, force: true });
     assert.ok(true);
   });
+
+  it("deduplicates identical issues", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yoo-test-dedup-"));
+    try {
+      const issue: ReviewIssue = { severity: "medium", file: "src/a.ts", issue: "missing type", suggestion: "add it" };
+      recordIssues(dir, [issue]);
+      recordIssues(dir, [issue]);
+      const past = getPastIssuesForFiles(dir, ["src/a.ts"]);
+      const matches = past.match(/missing type/g);
+      assert.equal(matches?.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ranks issues by semantic similarity when a query is provided", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yoo-test-semantic-"));
+    try {
+      const issues: ReviewIssue[] = [
+        { severity: "medium", file: "src/a.ts", issue: "variable naming unclear", suggestion: "rename" },
+        { severity: "high", file: "src/a.ts", issue: "race condition in async handler", suggestion: "add lock" },
+      ];
+      recordIssues(dir, issues);
+      const past = getPastIssuesForFiles(dir, ["src/a.ts"], "async concurrency bug");
+      assert.match(past, /race condition/);
+      // The top-ranked issue should be the concurrency-related one.
+      assert.ok(past.indexOf("race condition") < past.indexOf("naming"), "concurrency issue should rank higher");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

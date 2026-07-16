@@ -91,6 +91,26 @@ export interface Config {
     assert.equal(index.stats?.skipped, 0);
   });
 
+  it("reuses unchanged files from existing index", () => {
+    mkdirSync(join(cwd, "src"), { recursive: true });
+    writeFileSync(join(cwd, "src", "a.ts"), "export const a = 1;", "utf-8");
+    writeFileSync(join(cwd, "src", "b.ts"), "export const b = 2;", "utf-8");
+
+    const first = buildProjectIndex(cwd);
+    saveProjectIndex(cwd, first);
+
+    // Modify only one file.
+    writeFileSync(join(cwd, "src", "b.ts"), "export const b = 3;", "utf-8");
+
+    const second = buildProjectIndex(cwd);
+    assert.equal(second.stats?.reused, 1);
+    assert.equal(second.files.length, 2);
+    const a = second.files.find((f) => f.file === "src/a.ts");
+    assert.equal(a?.symbols[0]?.name, "a");
+    const b = second.files.find((f) => f.file === "src/b.ts");
+    assert.equal(b?.symbols[0]?.name, "b");
+  });
+
   it("cleans up temp dir", () => {
     rmSync(cwd, { recursive: true, force: true });
   });

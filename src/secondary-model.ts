@@ -21,6 +21,8 @@ import {
   setSdkStreamSimpleOverride,
 } from "./backends/index.js";
 import type { CallSecondaryModelOptions, UsageCost } from "./types.js";
+import type { SecondaryModelConfig } from "./types/secondary-model.js";
+import type { HeyyooConfig } from "./types.js";
 
 export {
   estimateCost,
@@ -52,6 +54,13 @@ function isRetryableBackendError(err: unknown): boolean {
   );
 }
 
+type ModelAttempt = {
+  provider: string;
+  model: string;
+  thinking?: string;
+  secondary: SecondaryModelConfig | undefined;
+};
+
 export async function callSecondaryModel(
   provider: string,
   model: string,
@@ -62,14 +71,61 @@ export async function callSecondaryModel(
   const { thinking: optionsThinking, cwd, task } = options;
   const config = cwd ? loadHeyyooConfig(cwd) : undefined;
   const effectiveSecondary = config && task ? resolveTaskModel(config, task) : config?.secondary;
-  provider = (effectiveSecondary?.provider || provider).toLowerCase();
-  model = effectiveSecondary?.id || model;
-  const thinking = optionsThinking ?? effectiveSecondary?.thinking;
+
+  const attempts: ModelAttempt[] = [
+    {
+      provider: (effectiveSecondary?.provider || provider).toLowerCase(),
+      model: effectiveSecondary?.id || model,
+      thinking: optionsThinking ?? effectiveSecondary?.thinking,
+      secondary: effectiveSecondary,
+    },
+  ];
+  for (const fallback of config?.secondaryFallback ?? []) {
+    attempts.push({
+      provider: (fallback.provider || provider).toLowerCase(),
+      model: fallback.id || model,
+      thinking: fallback.thinking ?? effectiveSecondary?.thinking,
+      secondary: fallback,
+    });
+  }
+
+  const lastErrors: string[] = [];
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
+    try {
+      return await runSingleAttempt(attempt, systemPrompt, userPrompt, options, config, cwd);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastErrors.push(`${attempt.provider}:${attempt.model} -> ${msg}`);
+      if (cwd) {
+        logEvent(cwd, "warn", "Secondary model attempt failed", {
+          provider: attempt.provider,
+          model: attempt.model,
+          attempt: i + 1,
+          total: attempts.length,
+          error: msg,
+        });
+      }
+    }
+  }
+
+  throw new Error(`All secondary model attempts failed: ${lastErrors.join("; ")}`);
+}
+
+async function runSingleAttempt(
+  attempt: ModelAttempt,
+  systemPrompt: string,
+  userPrompt: string,
+  options: CallSecondaryModelOptions,
+  config: HeyyooConfig | undefined,
+  cwd: string | undefined,
+): Promise<{ content: string; usage: UsageCost }> {
+  const { provider, model, thinking, secondary } = attempt;
 
   const { backend, apiInfo, sdkModelInfo, modelInfoOverride } = await resolveBackend(
     provider,
     model,
-    effectiveSecondary,
+    secondary,
     config?.modelInfo,
   );
 
@@ -114,7 +170,7 @@ export async function callSecondaryModel(
           thinking,
           cwd: opts.cwd,
           sessionManager: opts.sessionManager,
-          secondary: effectiveSecondary,
+          secondary,
           modelInfoOverride,
           sdkModelInfo,
           structuredOutput: opts.structuredOutput,
@@ -129,7 +185,7 @@ export async function callSecondaryModel(
         );
       }
 
-      const apiKey = resolveApiKey(provider, effectiveSecondary?.apiKey);
+      const apiKey = resolveApiKey(provider, secondary?.apiKey);
       if (!apiKey) {
         throw new Error(
           `No API key found for provider "${provider}". Set the appropriate environment variable, configure auth.json, ` +

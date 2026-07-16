@@ -175,6 +175,7 @@ export function buildReviewUserContext(args: {
   conventionsText?: string;
   preReviewOutput?: string;
   memoryContext?: string;
+  relatedContext?: string;
   truncated?: boolean;
   droppedFiles?: string[];
   budgetNote?: string;
@@ -190,6 +191,7 @@ export function buildReviewUserContext(args: {
     conventionsText,
     preReviewOutput,
     memoryContext,
+    relatedContext,
     truncated,
     droppedFiles,
     budgetNote,
@@ -203,6 +205,7 @@ export function buildReviewUserContext(args: {
     : "";
   const preReviewBlock = preReviewOutput ? `\n\n<pre_review_output>\n${preReviewOutput}\n</pre_review_output>` : "";
   const memoryBlock = memoryContext ? `\n\n<memory>\n${memoryContext}\n</memory>` : "";
+  const relatedBlock = relatedContext ? `\n\n<related_files>\n${relatedContext}\n</related_files>` : "";
 
   const fileContentsBlock =
     fileContents.length > 0
@@ -223,7 +226,7 @@ export function buildReviewUserContext(args: {
   const budgetBlock = budgetNote ? `\n\n${budgetNote}` : "";
   const vcsLine = vcs ? `\n\nVersion control: ${vcs}` : "";
 
-  return `Review this code change. The developer says:\n\n${description}${vcsLine}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${truncationNotice}${droppedBlock}${budgetBlock}`;
+  return `Review this code change. The developer says:\n\n${description}${vcsLine}${currentStepBlock}\n\n<diff>\n${diff}\n</diff>${fileContentsBlock}${criteriaBlock}${sessionBlock}${conventionsBlock}${preReviewBlock}${memoryBlock}${relatedBlock}${truncationNotice}${droppedBlock}${budgetBlock}`;
 }
 
 function buildAdaptiveReviewPromptImpl(
@@ -238,6 +241,7 @@ function buildAdaptiveReviewPromptImpl(
     conventionsText?: string;
     preReviewOutput?: string;
     memoryContext?: string;
+    relatedContext?: string;
     truncated?: boolean;
     droppedFiles?: string[];
     budgetNote?: string;
@@ -252,6 +256,7 @@ function buildAdaptiveReviewPromptImpl(
     conventionsText,
     preReviewOutput,
     memoryContext,
+    relatedContext,
     truncated,
     droppedFiles,
     budgetNote,
@@ -314,6 +319,7 @@ ${EVIDENCE_RULES}`,
       conventionsText,
       preReviewOutput,
       memoryContext,
+      relatedContext,
       truncated,
       droppedFiles,
       budgetNote,

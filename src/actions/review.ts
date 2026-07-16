@@ -1,12 +1,14 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
-import { getDiff, splitDiffByFile } from "../diff-grabber.js";
+import { getDiff, splitDiffByFile, getVcsInfo } from "../diff-grabber.js";
 import { loadConventions, formatConventions } from "../conventions.js";
 import { providerSupportsJsonObject, estimateCost } from "../secondary-model.js";
 import { loadFileContentsForReview, isReviewableFile, type FileContentEntry } from "../file-loader.js";
+import { buildRelatedContext } from "../context-retrieval.js";
+import { buildAstContext } from "../ast-context.js";
 import { getPastIssuesForFiles, recordIssues } from "../review-memory.js";
 import { runPreReviewCommands, formatPreReviewOutput } from "../pre-review.js";
-import { calculateReviewBudget, estimateTokens, type ReviewBudget } from "../token-budget.js";
+import { calculateReviewBudget, estimateTokens, truncateToTokenBudget, type ReviewBudget } from "../token-budget.js";
 import { getSessionCost, formatCost, reserveCost, releaseCost } from "../cost-tracker.js";
 import { logEvent } from "../logger.js";
 import {
@@ -15,6 +17,8 @@ import {
   incrementReviewRounds,
   getProgress,
   markJudgeCompleted,
+  getLastReviewedCommit,
+  setLastReviewedCommit,
 } from "../session-state.js";
 import { planStepDescription } from "../types.js";
 import { STAGES, secondaryModelLabel, recordCostWithBudget, mergeUsageCost, toolLoopOptions } from "./shared.js";
@@ -68,20 +72,37 @@ export async function executeYooReview(
       : undefined;
 
   progress(1, STAGES.review, "Collecting diff…");
-  const { diff, truncated, changedFiles, vcs } = getDiff(cwd, {
-    ...options,
-    maxDiffChars: config.reviewMaxDiffChars,
-  });
+  const diffOptions = { ...options, maxDiffChars: config.reviewMaxDiffChars };
+  const vcsInfo = getVcsInfo(cwd);
+  const lastReviewed = getLastReviewedCommit(cwd);
+  const canUseIncremental =
+    vcsInfo.type === "git" &&
+    !vcsInfo.dirty &&
+    lastReviewed &&
+    !diffOptions.revision &&
+    !diffOptions.since &&
+    !diffOptions.files?.length &&
+    !diffOptions.exclude?.length &&
+    !diffOptions.untracked;
+  if (canUseIncremental) {
+    diffOptions.since = lastReviewed;
+  }
+  const { diff, truncated, changedFiles, vcs } = getDiff(cwd, diffOptions);
+  const relatedContext =
+    buildAstContext(cwd, changedFiles, { maxTokens: 1000 }) || buildRelatedContext(cwd, changedFiles).context;
   const sessionContext = getSessionContext(ctx);
 
   progress(2, STAGES.review, "Loading project conventions…");
   let conventionsText = "";
   const conventions = loadConventions(cwd);
   if (conventions) {
-    conventionsText = formatConventions(conventions);
+    conventionsText = truncateToTokenBudget(formatConventions(conventions), config.reviewMaxConventionsTokens ?? 1000);
   }
 
-  const memoryContext = getPastIssuesForFiles(cwd, changedFiles);
+  const memoryContext = truncateToTokenBudget(
+    getPastIssuesForFiles(cwd, changedFiles, description),
+    config.reviewMaxMemoryTokens ?? 800,
+  );
 
   const cacheable = !config.preReviewCommands || config.preReviewCommands.length === 0;
   const cacheKey = cacheable
@@ -203,7 +224,10 @@ export async function executeYooReview(
     }
     const preps = await Promise.all(
       filesWithDiff.map(async (file): Promise<FilePrep> => {
-        const fileMemoryContext = getPastIssuesForFiles(cwd, [file]);
+        const fileMemoryContext = truncateToTokenBudget(
+          getPastIssuesForFiles(cwd, [file], description),
+          config.reviewMaxMemoryTokens ?? 800,
+        );
         const fileBudget = calculateReviewBudget(
           modelConfig.provider,
           modelConfig.id,
@@ -262,6 +286,7 @@ export async function executeYooReview(
         conventionsText,
         preReviewOutput,
         memoryContext: p.fileMemoryContext,
+        relatedContext,
         truncated,
         droppedFiles: p.droppedForBudget,
         budget: p.fileBudget,
@@ -356,6 +381,7 @@ export async function executeYooReview(
         conventionsText,
         preReviewOutput,
         memoryContext,
+        relatedContext,
         truncated: finalDiffTruncated,
         droppedFiles: finalDroppedFiles,
         budget: budgetWithPreReview,
@@ -484,11 +510,14 @@ export async function executeYooReview(
     if ((updatedState.reviewRounds[updatedState.completedSteps] ?? 0) >= 3) {
       review.escalated = true;
       review.suggestions.push(
-        "This step has failed review 3 times. Consider asking the user for guidance or trying a fundamentally different approach.",
+        "This step has failed review 3 times. Consider regenerating the plan with `/yoo-plan-update` or `yoo({ planUpdate: '...' })`, breaking this step into smaller pieces, or asking the user for guidance.",
       );
     }
   }
 
   progress(10, STAGES.review, "Finalizing review…");
+  if (vcsInfo.type === "git" && vcsInfo.revision && review.verdict !== "blocked") {
+    setLastReviewedCommit(cwd, vcsInfo.revision);
+  }
   return { action: "review", review, cost, model: modelProfile };
 }

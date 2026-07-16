@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import * as ts from "typescript";
 import { filterSourceFiles, listTrackedFiles } from "./conventions.js";
@@ -17,6 +17,7 @@ export interface SymbolInfo {
 export interface FileIndex {
   file: string;
   symbols: SymbolInfo[];
+  mtime?: number;
 }
 
 export interface ProjectIndex {
@@ -27,6 +28,7 @@ export interface ProjectIndex {
     indexed: number;
     skipped: number;
     symbols: number;
+    reused?: number;
   };
 }
 
@@ -67,6 +69,7 @@ function isValidProjectIndex(value: unknown): value is ProjectIndex {
     const file = f as Record<string, unknown>;
     if (typeof file.file !== "string") return false;
     if (!Array.isArray(file.symbols)) return false;
+    if (file.mtime !== undefined && typeof file.mtime !== "number") return false;
   }
   if (v.stats && typeof v.stats === "object" && !Array.isArray(v.stats)) {
     const s = v.stats as Record<string, unknown>;
@@ -74,6 +77,7 @@ function isValidProjectIndex(value: unknown): value is ProjectIndex {
     if (typeof s.indexed !== "number") return false;
     if (typeof s.skipped !== "number") return false;
     if (typeof s.symbols !== "number") return false;
+    if (s.reused !== undefined && typeof s.reused !== "number") return false;
   }
   return true;
 }
@@ -94,21 +98,27 @@ export function saveProjectIndex(cwd: string, index: ProjectIndex): void {
 export function buildProjectIndex(cwd: string): ProjectIndex {
   const tracked = listTrackedFiles(cwd);
   const files = filterSourceFiles(tracked).filter((f) => SUPPORTED_EXTENSIONS.has(getExtension(f)));
+  const existing = loadProjectIndex(cwd);
+  const existingByFile = new Map(existing?.files.map((f) => [f.file, f]) ?? []);
 
   const index: ProjectIndex = {
     generatedAt: new Date().toISOString(),
     files: [],
-    stats: { scanned: files.length, indexed: 0, skipped: 0, symbols: 0 },
+    stats: { scanned: files.length, indexed: 0, skipped: 0, symbols: 0, reused: 0 },
   };
 
   for (const rel of files) {
     const filePath = `${cwd}/${rel}`;
-    const fileIndex = indexFile(cwd, filePath, rel);
+    const cached = existingByFile.get(rel);
+    const fileIndex = buildFileIndex(cwd, filePath, rel, cached);
     if (fileIndex) {
       if (fileIndex.symbols.length > 0) {
         index.files.push(fileIndex);
         index.stats!.indexed += 1;
         index.stats!.symbols += fileIndex.symbols.length;
+      }
+      if (fileIndex.mtime && cached && fileIndex.mtime === cached.mtime) {
+        index.stats!.reused = (index.stats!.reused ?? 0) + 1;
       }
     } else {
       index.stats!.skipped += 1;
@@ -125,14 +135,19 @@ function getExtension(file: string): string {
   return dot > 0 ? lower.slice(dot) : "";
 }
 
-function indexFile(cwd: string, filePath: string, relPath: string): FileIndex | undefined {
+function buildFileIndex(cwd: string, filePath: string, relPath: string, cached?: FileIndex): FileIndex | undefined {
   try {
+    const stats = statSync(filePath);
+    const mtime = stats.mtimeMs;
+    if (cached && cached.mtime === mtime && cached.symbols.length > 0) {
+      return { file: relPath, symbols: cached.symbols, mtime };
+    }
     const content = readFileSync(filePath, "utf-8");
     if (content.length > MAX_FILE_BYTES) {
-      return { file: relPath, symbols: [] };
+      return { file: relPath, symbols: [], mtime };
     }
     const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, getScriptKind(relPath));
-    return { file: relPath, symbols: extractSymbols(sourceFile) };
+    return { file: relPath, symbols: extractSymbols(sourceFile), mtime };
   } catch (err) {
     logEvent(cwd, "warn", "Failed to index file", {
       file: relPath,
@@ -292,7 +307,9 @@ export function formatIndexSummary(index: ProjectIndex, query?: string): string 
   const stats = index.stats;
   const statsLine = stats
     ? `Scanned ${stats.scanned} file(s), indexed ${stats.indexed} file(s) with ${stats.symbols} symbol(s)` +
-      (stats.skipped > 0 ? `, skipped ${stats.skipped} file(s).` : ".")
+      (stats.skipped > 0 ? `, skipped ${stats.skipped} file(s)` : "") +
+      (stats.reused && stats.reused > 0 ? `, reused ${stats.reused} file(s)` : "") +
+      "."
     : `Indexed ${totalSymbols} symbol(s) across ${index.files.length} file(s).`;
   if (lines.length === 0) {
     return q ? `${statsLine}\n\nNo symbols match "${query}".` : `${statsLine}\n\nNo symbols indexed.`;

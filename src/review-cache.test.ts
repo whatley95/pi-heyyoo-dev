@@ -3,12 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  buildCacheKey,
-  clearReviewCache,
-  getCachedReview,
-  setCachedResult,
-} from "./review-cache.js";
+import { buildCacheKey, clearReviewCache, getCachedReview, setCachedResult } from "./review-cache.js";
 import type { ReviewResult } from "./types.js";
 
 function makeTempDir(prefix: string): string {

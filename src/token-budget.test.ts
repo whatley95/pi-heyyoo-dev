@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { calculateReviewBudget, estimateTokens } from "./token-budget.js";
+import { calculateReviewBudget, estimateTokens, truncateToTokenBudget } from "./token-budget.js";
 import type { HeyyooConfig } from "./types.js";
 
 describe("token budget", () => {
@@ -61,5 +61,12 @@ describe("token budget", () => {
     );
     assert.equal(budget.contextWindow, 32_000);
     assert.equal(budget.reservedOutputTokens, 4096);
+  });
+
+  it("truncates text to token budget", () => {
+    const long = "a".repeat(1000);
+    const truncated = truncateToTokenBudget(long, 10);
+    assert.ok(truncated.length < long.length);
+    assert.match(truncated, /\(truncated to token budget\)/);
   });
 });

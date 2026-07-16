@@ -78,6 +78,8 @@ Structured tools let the secondary model write brief Markdown analysis, but the 
 | `reviewMaxDiffChars`           | number                                  | Legacy cap on diff characters; prefer `reviewMaxInputTokens`                                                                        |
 | `reviewFullFileThresholdLines` | number                                  | Include full content for changed files under this line count (default: 300)                                                         |
 | `reviewMaxInputTokens`         | number                                  | Hard cap on review input tokens                                                                                                     |
+| `reviewMaxConventionsTokens`   | number                                  | Max tokens of project conventions included in review prompts (default: 1000)                                                        |
+| `reviewMaxMemoryTokens`        | number                                  | Max tokens of past review issues included in review prompts (default: 800)                                                          |
 | `reviewStrategy`               | `"auto" \| "diff-only" \| "full-files"` | How to include changed file contents (default: `"auto"`)                                                                            |
 | `verifyByDefault`              | boolean                                 | If true, every yoo result asks the main agent to confirm the finding with evidence                                                  |
 | `selfVerify`                   | boolean                                 | Run a second verification pass on `yoo.review` and `yoo.judge` results (costs extra tokens)                                         |
@@ -92,6 +94,7 @@ Structured tools let the secondary model write brief Markdown analysis, but the 
 | `secondary.maxRetries`         | number                                  | Maximum SDK request retries (SDK backend only, default: 3)                                                                          |
 | `secondary.maxRetryDelayMs`    | number                                  | Maximum delay between SDK retries in ms (SDK backend only, default: 60000)                                                          |
 | `secondary.timeoutMs`          | number                                  | SDK request timeout in ms (SDK backend only, default: 300000 = 5 min)                                                               |
+| `secondaryFallback`            | `SecondaryModelConfig[]`                | Fallback secondary models to try if the primary fails; useful for provider outages or rate limits                                   |
 | `secondary.apiKey`             | string                                  | Inline API key (prefer `auth.json` or env vars)                                                                                     |
 | `secondary.style`              | `"openai-compatible" \| "anthropic"`    | API style when using `baseUrl` (default: `"openai-compatible"`)                                                                     |
 | `secondary.authHeader`         | string                                  | Custom auth header name when using `baseUrl`                                                                                        |
@@ -309,6 +312,25 @@ Recorded facts appear in `yoo_index({ topic: "learned" })`.
 
 `/yoo test` and `/yoo security` accept the same diff-scoping flags as `/yoo review` (`--files`, `--exclude`, `--revision`, `--since`, `--vcs`, `--untracked`). `/yoo-test` (with a hyphen) is a separate command that tests model connectivity.
 
+## Caching and optimization
+
+pi-heyyoo uses several caches to avoid redundant work and cost:
+
+| Cache | File | Purpose |
+| ----- | ---- | ------- |
+| Review result cache | `.pi/heyyoo/review-cache.json` | Skip duplicate `yoo.review` calls for the same diff (1-hour TTL) |
+| OAuth API-key cache | `.pi/heyyoo/oauth-cache.json` | Avoid re-authenticating OAuth providers across Pi sessions (55-min TTL) |
+| Project symbol index | `.pi/heyyoo/index.json` | Reuses unchanged files on incremental updates |
+| Review memory | `.pi/heyyoo/memory.json` | Deduplicated, capped at 20 issues per file / 100 files, 7-day TTL |
+
+Context compression is applied automatically in reviews: conventions and past issues are truncated to their configured token budgets (`reviewMaxConventionsTokens`, `reviewMaxMemoryTokens`).
+
+**Incremental diff review:** When the working tree is clean, `yoo.review` diffs against the last reviewed commit instead of the full working tree, so committed changes are reviewed incrementally. The last reviewed commit is stored in session state and reset when a new plan is created.
+
+**Smart context retrieval:** `yoo.review` follows relative imports in changed files and includes compact outlines of referenced files (up to 5 files, 1000 tokens) so the model sees related APIs without loading the entire codebase.
+
+**Deep AST context retrieval:** When a `tsconfig.json` is present, `yoo.review` uses the TypeScript compiler API to resolve imported symbols to their actual declarations and includes only those precise signatures (up to 1000 tokens). Falls back to regex-based import following if no `tsconfig.json` is found.
+
 ## Logging
 
 yoo writes error and event entries to `<pi-config-dir>/heyyoo/yoo.log` in the current project (by default `.pi/heyyoo/yoo.log`). Use these commands to inspect or clear it:
@@ -383,7 +405,7 @@ This prevents the main agent from spinning in review-fix-review cycles.
 - **Project symbol index** — `yoo scan-deep` parses TypeScript/JavaScript source files and stores exported functions, classes, interfaces, types, and more; surfaced by `yoo_index`
 - **Project conventions** — scan results feed into plan, suggest, recommend, review, and judge prompts
 - **Learned facts** — `yoo_learn` persists project-specific facts across sessions; surfaced by `yoo_index`
-- **Review memory** — previous issues per file are included so the model knows what was already fixed; memory is reset for each new Pi session
+- **Review memory** — previous issues per file are included so the model knows what was already fixed. When a review description is provided, issues are ranked by semantic similarity to the current change. Memory is reset for each new Pi session
 - **Pre-review commands** — configured lint/test/typecheck output is included in the review prompt
 - **Cost tracking + budget** — estimated spend per call, session total, optional hard budget, and wall-clock elapsed time in result headers
 - **Robust JSON parsing** — accepts Markdown analysis followed by a `## Result` fenced JSON block, unwraps wrapper objects like `{ "response": "..." }`, and falls back to markdown salvage without changing the configured thinking level

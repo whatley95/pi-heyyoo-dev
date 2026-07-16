@@ -18,6 +18,8 @@ export interface HeyyooConfig {
   secondary: import("./types/secondary-model.js").SecondaryModelConfig;
   /** Per-task model overrides. Any omitted field falls back to `secondary`. */
   taskModels?: Partial<Record<YooModelTask, Partial<import("./types/secondary-model.js").SecondaryModelConfig>>>;
+  /** Fallback secondary models to try if the primary model fails. Each fallback is tried in order. */
+  secondaryFallback?: import("./types/secondary-model.js").SecondaryModelConfig[];
   autoJudge?: boolean;
   preReviewCommands?: string[];
   /** Custom command to run for yoo.test analysis (e.g. "npm test"). If omitted, yoo.test will auto-detect or fall back to static diff analysis. */
@@ -26,6 +28,8 @@ export interface HeyyooConfig {
   reviewMaxDiffChars?: number;
   reviewFullFileThresholdLines?: number;
   reviewMaxInputTokens?: number;
+  reviewMaxConventionsTokens?: number;
+  reviewMaxMemoryTokens?: number;
   reviewStrategy?: "auto" | "diff-only" | "full-files";
   verifyByDefault?: boolean;
   /** Run a second model pass that critiques review/judge results for unsupported claims. Default false. */
@@ -162,6 +166,7 @@ export interface HeyyooSessionState {
   editsSinceLastReview: number;
   editsSinceLastDone: number;
   lastSteerAt?: number;
+  lastReviewedCommit?: string;
 }
 
 export interface YooToolParams {

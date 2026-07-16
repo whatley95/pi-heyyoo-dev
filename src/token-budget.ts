@@ -14,6 +14,12 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+export function truncateToTokenBudget(text: string, maxTokens: number): string {
+  if (estimateTokens(text) <= maxTokens) return text;
+  const maxChars = maxTokens * 4;
+  return text.slice(0, maxChars) + "\n… (truncated to token budget)";
+}
+
 export function calculateReviewBudget(
   provider: string,
   model: string,

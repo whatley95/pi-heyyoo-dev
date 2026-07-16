@@ -18,6 +18,7 @@ export function getState(cwd: string): HeyyooSessionState {
     };
     state.editsSinceLastReview ??= 0;
     state.editsSinceLastDone ??= 0;
+    state.lastReviewedCommit ??= undefined;
     sessionStates.set(cwd, state);
   }
   return state;
@@ -34,6 +35,7 @@ export function setPlan(cwd: string, plan: PlanResult): void {
   state.editsSinceLastReview = 0;
   state.editsSinceLastDone = 0;
   state.lastSteerAt = undefined;
+  state.lastReviewedCommit = undefined;
   saveState(cwd, state);
 }
 
@@ -69,9 +71,22 @@ export function getProgress(cwd: string): { completed: number; total: number; ne
   const state = getState(cwd);
   const completed = state.completedSteps;
   const total = state.totalSteps;
-  const item = state.plan?.todo[completed];
-  const nextStep = item ? planStepDescription(item) : undefined;
+  const nextIndex = findNextEligibleStep(state);
+  const nextStep = nextIndex !== undefined ? planStepDescription(state.plan!.todo[nextIndex]) : undefined;
   return { completed, total, nextStep };
+}
+
+function findNextEligibleStep(state: HeyyooSessionState): number | undefined {
+  if (!state.plan || state.plan.todo.length === 0) return undefined;
+  for (let i = state.completedSteps; i < state.plan.todo.length; i++) {
+    const step = state.plan.todo[i];
+    if (typeof step === "string") return i;
+    const deps = step.dependsOn;
+    if (!Array.isArray(deps) || deps.length === 0) return i;
+    const allDepsDone = deps.every((d) => typeof d === "number" && d >= 1 && d - 1 < state.completedSteps);
+    if (allDepsDone) return i;
+  }
+  return undefined;
 }
 
 export function buildReviewHistory(cwd: string): string {
@@ -117,6 +132,16 @@ export function resetEditsSinceDone(cwd: string): void {
 export function getEditTracker(cwd: string): { editsSinceLastReview: number; editsSinceLastDone: number } {
   const state = getState(cwd);
   return { editsSinceLastReview: state.editsSinceLastReview, editsSinceLastDone: state.editsSinceLastDone };
+}
+
+export function getLastReviewedCommit(cwd: string): string | undefined {
+  return getState(cwd).lastReviewedCommit;
+}
+
+export function setLastReviewedCommit(cwd: string, commit: string | undefined): void {
+  const state = getState(cwd);
+  state.lastReviewedCommit = commit;
+  saveState(cwd, state);
 }
 
 export function dropSessionState(cwd: string): void {

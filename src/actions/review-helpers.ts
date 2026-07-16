@@ -126,6 +126,7 @@ export interface ReviewBatchInput {
   conventionsText: string;
   preReviewOutput: string;
   memoryContext: string;
+  relatedContext?: string;
   truncated: boolean;
   droppedFiles: string[];
   budget: ReviewBudget;
@@ -154,6 +155,7 @@ export async function runReviewBatch(
     conventionsText,
     preReviewOutput,
     memoryContext,
+    relatedContext,
     truncated,
     droppedFiles,
     budget,
@@ -188,6 +190,7 @@ export async function runReviewBatch(
       conventionsText,
       preReviewOutput,
       memoryContext,
+      relatedContext,
       truncated: diffTruncated,
       droppedFiles,
       budgetNote: `Context window: ${budget.contextWindow.toLocaleString()} tokens. Reserved output: ${budget.reservedOutputTokens.toLocaleString()}. Available for context: ${budget.availableInputTokens.toLocaleString()}.`,

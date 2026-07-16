@@ -3,6 +3,7 @@ import { readRawAuthEntry, resolveApiKey } from "../auth-reader.js";
 import { getAgentDir } from "../config.js";
 import { logEvent } from "../logger.js";
 import { resolveModelInfo } from "../model-registry.js";
+import { getCachedOAuthApiKey, setCachedOAuthApiKey } from "../oauth-cache.js";
 import type { CallSecondaryModelOptions } from "../types.js";
 import type { SecondaryModelConfig } from "../types/secondary-model.js";
 import { getPiSessionId } from "./pi-backend.js";
@@ -92,14 +93,29 @@ async function fetchOAuthApiKey(
 async function resolveOAuthApiKey(
   provider: string,
   credential: Record<string, unknown>,
+  cwd: string | undefined,
 ): Promise<{ apiKey: string; newCredentials?: Record<string, unknown> } | undefined> {
   const cached = oauthApiKeyCache.get(provider);
   if (cached && JSON.stringify(cached.credential) === JSON.stringify(credential)) {
     return { apiKey: cached.apiKey };
   }
+  if (cwd) {
+    const diskKey = getCachedOAuthApiKey(cwd, provider, credential);
+    if (diskKey) {
+      oauthApiKeyCache.set(provider, { credential, apiKey: diskKey });
+      return { apiKey: diskKey };
+    }
+  }
   const result = await fetchOAuthApiKey(provider, credential);
   if (result) {
     oauthApiKeyCache.set(provider, { credential, apiKey: result.apiKey });
+    if (cwd) {
+      const expiresAt =
+        result.newCredentials && typeof result.newCredentials.expiresAt === "number"
+          ? result.newCredentials.expiresAt
+          : undefined;
+      setCachedOAuthApiKey(cwd, provider, credential, result.apiKey, expiresAt);
+    }
   }
   return result;
 }
@@ -136,7 +152,7 @@ async function resolveSdkApiKey(
 
   const entry = readRawAuthEntry(provider);
   if (entry?.type === "oauth") {
-    const result = await resolveOAuthApiKey(provider, entry);
+    const result = await resolveOAuthApiKey(provider, entry, cwd);
     if (result) {
       if (result.newCredentials) {
         persistRefreshedCredential(provider, { type: "oauth", ...result.newCredentials });

@@ -83,6 +83,8 @@ export function loadHeyyooConfig(cwd: string): HeyyooConfig {
     autoJudge: false,
     preReviewCommands: [],
     reviewFullFileThresholdLines: 300,
+    reviewMaxConventionsTokens: 1000,
+    reviewMaxMemoryTokens: 800,
     reviewStrategy: "auto",
     docs: {
       sources: {},
@@ -141,6 +143,8 @@ const KNOWN_CONFIG_KEYS = new Set([
   "reviewMaxDiffChars",
   "reviewFullFileThresholdLines",
   "reviewMaxInputTokens",
+  "reviewMaxConventionsTokens",
+  "reviewMaxMemoryTokens",
   "reviewStrategy",
   "verifyByDefault",
   "selfVerify",
@@ -326,6 +330,8 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     reviewMaxDiffChars: pickOptionalNumber(o.reviewMaxDiffChars, base.reviewMaxDiffChars),
     reviewFullFileThresholdLines: pickOptionalNumber(o.reviewFullFileThresholdLines, base.reviewFullFileThresholdLines),
     reviewMaxInputTokens: pickOptionalNumber(o.reviewMaxInputTokens, base.reviewMaxInputTokens),
+    reviewMaxConventionsTokens: pickOptionalNumber(o.reviewMaxConventionsTokens, base.reviewMaxConventionsTokens),
+    reviewMaxMemoryTokens: pickOptionalNumber(o.reviewMaxMemoryTokens, base.reviewMaxMemoryTokens),
     reviewStrategy: ["auto", "diff-only", "full-files"].includes(o.reviewStrategy ?? "")
       ? o.reviewStrategy
       : base.reviewStrategy,

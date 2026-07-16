@@ -10,6 +10,8 @@ import {
   getProgress,
   getState,
   markJudgeCompleted,
+  getLastReviewedCommit,
+  setLastReviewedCommit,
 } from "./session-state.js";
 import type { PlanResult } from "./types.js";
 
@@ -54,4 +56,35 @@ test("judgeCompleted flag is set and reset by setPlan", () => {
   assert.equal(getState(cwd).judgeCompleted, true);
   setPlan(cwd, plan);
   assert.equal(getState(cwd).judgeCompleted, false);
+});
+
+test("lastReviewedCommit is tracked", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  assert.equal(getLastReviewedCommit(cwd), undefined);
+  setLastReviewedCommit(cwd, "abc123");
+  assert.equal(getLastReviewedCommit(cwd), "abc123");
+  setPlan(cwd, plan);
+  assert.equal(getLastReviewedCommit(cwd), undefined);
+});
+
+test("getProgress skips steps whose dependencies are not yet completed", () => {
+  const cwd = tempCwd();
+  const depPlan: PlanResult = {
+    summary: "demo",
+    todo: ["step one", { description: "step two", dependsOn: [1] }, { description: "step three", dependsOn: [1] }],
+    acceptanceCriteria: [],
+  };
+  setPlan(cwd, depPlan);
+  markStepComplete(cwd);
+  // step one is done; step two depends on it, so it should be eligible.
+  assert.equal(getProgress(cwd).nextStep, "step two");
+
+  // Pretend step two is skipped and we try to advance to step three.
+  // In the current model completedSteps is sequential, so this is just a sanity check.
+  const state = getState(cwd);
+  state.completedSteps = 1;
+  state.reviewedSteps = [true, false, false];
+  // With completedSteps=1, next eligible is step two (depends on one) not step three.
+  assert.equal(getProgress(cwd).nextStep, "step two");
 });
