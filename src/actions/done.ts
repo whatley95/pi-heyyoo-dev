@@ -1,4 +1,16 @@
-import { getProgress, markStepComplete, markStepsComplete } from "../session-state.js";
+import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
+import { getDiff } from "../diff-grabber.js";
+import {
+  getProgress,
+  markStepComplete,
+  markStepsComplete,
+  getState,
+  getEditTracker,
+  resetEditsSinceDone,
+} from "../session-state.js";
+import { callSecondaryModel } from "../secondary-model.js";
+import { buildStepVerificationPrompt, parseStepVerificationResponse } from "../prompts.js";
+import { logEvent } from "../logger.js";
 import type { DoneResult } from "../types.js";
 
 function parseDoneTarget(value: string | number | undefined): { targetStep?: number; label: string } {
@@ -19,7 +31,7 @@ function parseDoneTarget(value: string | number | undefined): { targetStep?: num
   return { label: value };
 }
 
-export function executeYooDone(cwd: string, value?: string | number): DoneResult {
+export async function executeYooDone(cwd: string, value?: string | number, signal?: AbortSignal): Promise<DoneResult> {
   const before = getProgress(cwd);
   if (before.total === 0) {
     return {
@@ -38,12 +50,56 @@ export function executeYooDone(cwd: string, value?: string | number): DoneResult
     };
   }
 
+  const config = loadHeyyooConfig(cwd);
   const { targetStep, label } = parseDoneTarget(value);
+  const state = getState(cwd);
+  const currentStepIndex = state.completedSteps;
+  const stepDescription =
+    state.plan && currentStepIndex < state.plan.todo.length
+      ? typeof state.plan.todo[currentStepIndex] === "string"
+        ? (state.plan.todo[currentStepIndex] as string)
+        : (state.plan.todo[currentStepIndex] as { description: string }).description
+      : "";
+
+  if (config.verifyDoneClaims !== false && getEditTracker(cwd).editsSinceLastDone > 0 && stepDescription) {
+    try {
+      const { diff } = getDiff(cwd, { maxDiffChars: config.reviewMaxDiffChars });
+      const modelConfig = resolveTaskModel(config, "done");
+      if (modelConfig.provider && modelConfig.id) {
+        const { system, user } = buildStepVerificationPrompt(stepDescription, diff);
+        const { content: raw } = await callSecondaryModel(modelConfig.provider, modelConfig.id, system, user, {
+          signal,
+          thinking: modelConfig.thinking,
+          cwd,
+          task: "done",
+          structuredOutput: true,
+        });
+        const verification = parseStepVerificationResponse(raw);
+        if (verification && !verification.satisfied) {
+          return {
+            completedStep: before.completed,
+            totalSteps: before.total,
+            nextStep: before.nextStep ?? undefined,
+            allDone: false,
+            verified: false,
+            verificationReason: verification.reason,
+            message: `Step ${before.completed + 1} does not appear to be complete: ${verification.reason}. Continue working or run yoo.review to confirm.`,
+          };
+        }
+      }
+    } catch (err) {
+      logEvent(cwd, "warn", "Done-claim verification failed; allowing step to advance", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   if (targetStep !== undefined) {
     markStepsComplete(cwd, targetStep, false);
   } else {
     markStepComplete(cwd);
   }
+  resetEditsSinceDone(cwd);
 
   const after = getProgress(cwd);
   return {
@@ -51,6 +107,7 @@ export function executeYooDone(cwd: string, value?: string | number): DoneResult
     totalSteps: after.total,
     nextStep: after.nextStep ?? undefined,
     allDone: after.completed >= after.total,
+    verified: true,
     message:
       targetStep !== undefined
         ? `Marked steps up to ${label} complete (${after.completed}/${after.total}).`

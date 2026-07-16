@@ -44,6 +44,7 @@ export const ReviewResultSchema = Type.Object(
     contextLimited: Type.Optional(Type.Boolean()),
     planStale: Type.Optional(Type.Boolean()),
     completedSteps: Type.Optional(Type.Number()),
+    fixPlan: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );
@@ -84,6 +85,10 @@ export const JudgeResultSchema = Type.Object(
     truncated: Type.Optional(Type.Boolean()),
     droppedFiles: Type.Optional(Type.Array(Type.String())),
     contextLimited: Type.Optional(Type.Boolean()),
+    completedStepIds: Type.Optional(Type.Array(Type.Number())),
+    planUpdateSuggested: Type.Optional(Type.Boolean()),
+    planUpdateReason: Type.Optional(Type.String()),
+    unreviewedEdits: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

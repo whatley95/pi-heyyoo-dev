@@ -4,6 +4,7 @@ import {
   applyExclude,
   extractChangedFiles,
   splitDiffByFile,
+  splitDiffByHunk,
   processDiff,
   DEFAULT_MAX_DIFF_CHARS,
 } from "./diff-grabber.js";
@@ -116,5 +117,29 @@ describe("diff-grabber helpers", () => {
     const filtered = applyExclude(diff, ["src/a.ts"]);
     assert.doesNotMatch(filtered, /change a/);
     assert.match(filtered, /change backup/);
+  });
+
+  it("splits a file diff by hunk", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,3 +1,3 @@",
+      " line1",
+      "-line2",
+      "+line2a",
+      " line3",
+      "@@ -10,3 +10,3 @@",
+      " line10",
+      "-line11",
+      "+line11a",
+      " line12",
+    ].join("\n");
+    const hunks = splitDiffByHunk(diff);
+    assert.equal(hunks.length, 2);
+    assert.match(hunks[0], /@@ -1,3/);
+    assert.match(hunks[1], /@@ -10,3/);
+    assert.match(hunks[0], /line2a/);
+    assert.match(hunks[1], /line11a/);
   });
 });

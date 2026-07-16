@@ -145,8 +145,19 @@ export function formatResultText(result: YooToolResult): string {
       if (result.review.autoJudged) {
         lines.push("**Auto-judge:** Last step done — final review was run automatically.");
       }
+      lines.push("");
+      lines.push(
+        "**Workflow:** 1) If this single change finished multiple plan steps, call `yoo.done` with those step numbers now. 2) Otherwise, implement the next step above. 3) Run `yoo.review` when the step is ready. 4) Run `yoo.judge` after the final step.",
+      );
     } else if (result.review.verdict === "needs-work" || result.review.verdict === "blocked") {
       lines.push("**Action:** Fix the issues above and call `yoo.review` again.");
+      if (result.review.fixPlan && result.review.fixPlan.length > 0) {
+        lines.push("");
+        lines.push("### Suggested fix plan");
+        for (let i = 0; i < result.review.fixPlan.length; i++) {
+          lines.push(`${i + 1}. ${result.review.fixPlan[i]}`);
+        }
+      }
       if (result.review.escalated) {
         lines.push(
           "⚠️ **Escalation:** This step has failed review 3+ times. Consider asking the user for guidance or a different approach.",
@@ -272,9 +283,22 @@ export function formatResultText(result: YooToolResult): string {
       lines.push("");
     }
 
-    if (result.judge.planStale) {
+    if (result.judge.unreviewedEdits) {
+      lines.push(
+        "⚠️ **Unreviewed edits:** There are edits since the last `yoo.review`. Consider running `yoo.review` before trusting this judgment.",
+      );
+      lines.push("");
+    }
+
+    if (result.judge.planStale || result.judge.planUpdateSuggested) {
       lines.push(
         "⚠️ **Plan stale:** The original plan contradicts the final code. The code is trusted; consider updating the plan with `/yoo plan ...` or `/yoo-clear` and re-planning.",
+      );
+      if (result.judge.planUpdateReason) {
+        lines.push(`Reason: ${result.judge.planUpdateReason}`);
+      }
+      lines.push(
+        "**Action:** Run `/yoo-plan-update <new task description>` to regenerate the plan from the current code.",
       );
       lines.push("");
     }
@@ -294,8 +318,15 @@ export function formatResultText(result: YooToolResult): string {
     if (result.judge.consensus) {
       lines.push("**Consensus:** Both agents agree — all work is complete and meets criteria.");
     }
+    if (result.judge.planProgress) {
+      lines.push(`**Progress:** ${result.judge.planProgress}`);
+    }
+    if (result.judge.nextStep) {
+      lines.push(`**Next step:** ${result.judge.nextStep}`);
+    }
+    lines.push("");
     lines.push(
-      "**Workflow tip:** If this change completed multiple plan steps, mark them done with `/yoo-done` so the tracker stays in sync for the next review/judge.",
+      "**Workflow:** Tracker auto-synced by judge. Implement the next step above, then run `yoo.review` when ready and `yoo.judge` after the final step. Use `yoo.done` or `yoo.planUpdate` only if the tracker needs a manual correction.",
     );
   }
 
@@ -304,6 +335,14 @@ export function formatResultText(result: YooToolResult): string {
     lines.push(`## ${header}${formatModelSuffix(result.model)}`);
     lines.push("");
     lines.push(result.done.message);
+    if (result.done.verified === false) {
+      lines.push("⚠️ **Verification failed:** the diff does not clearly satisfy this step.");
+      if (result.done.verificationReason) {
+        lines.push(`Reason: ${result.done.verificationReason}`);
+      }
+    } else if (result.done.verified === true) {
+      lines.push("✓ **Verified:** the diff satisfies this step.");
+    }
     lines.push(`**Progress:** ${result.done.completedStep}/${result.done.totalSteps} steps completed.`);
     if (result.done.nextStep) {
       lines.push(`**Next step:** ${result.done.nextStep}`);

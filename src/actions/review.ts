@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
-import { getDiff, splitDiffByFile, getVcsInfo } from "../diff-grabber.js";
+import { getDiff, splitDiffByFile, splitDiffByHunk, getVcsInfo } from "../diff-grabber.js";
 import { loadConventions, formatConventions } from "../conventions.js";
 import { providerSupportsJsonObject, estimateCost } from "../secondary-model.js";
 import { loadFileContentsForReview, isReviewableFile, type FileContentEntry } from "../file-loader.js";
@@ -197,12 +197,143 @@ export async function executeYooReview(
   const maxConcurrency =
     typeof config.parallelReview === "number" && config.parallelReview > 0 ? config.parallelReview : 3;
 
-  let review: ReviewResult;
+  let review: ReviewResult | undefined;
   let cost: UsageCost | undefined;
-  let finalDiffTruncated: boolean;
-  let finalDroppedFiles: string[];
+  let finalDiffTruncated = false;
+  let finalDroppedFiles: string[] = [];
+  let usedHunkChunking = false;
 
-  if (shouldParallelize) {
+  if (filesWithDiff.length === 1 && diffLikelyTruncated && strategy !== "diff-only") {
+    progress(7, STAGES.review, "Diff is large; splitting into hunks for review…");
+    const file = filesWithDiff[0];
+    const hunks = splitDiffByHunk(fileDiffs[file] ?? "");
+    if (hunks.length > 1) {
+      const fileMemoryContext = truncateToTokenBudget(
+        getPastIssuesForFiles(cwd, [file], description),
+        config.reviewMaxMemoryTokens ?? 800,
+      );
+      const fileBudget = calculateReviewBudget(
+        modelConfig.provider,
+        modelConfig.id,
+        config,
+        {
+          systemPrompt: "",
+          sessionContext,
+          conventionsText,
+          preReviewOutput,
+          description,
+          memoryContext: fileMemoryContext,
+        },
+        modelConfig,
+      );
+      const fileResult = await loadFileContentsForReview({
+        cwd,
+        changedFiles: [file],
+        budget: fileBudget,
+        strategy,
+        fullFileThresholdLines,
+      });
+      const droppedForBudget = fileResult.dropped.filter((f) => isReviewableFile(f));
+
+      const sharedContextEstimate = [sessionContext, conventionsText, preReviewOutput, description].join("\n");
+      const outputEstimate =
+        modelConfig.thinking && modelConfig.thinking.toLowerCase() !== "off"
+          ? (modelConfig.maxOutputTokens ?? 8192)
+          : 2048;
+      const perHunkInputEstimate =
+        1000 +
+        estimateTokens(sharedContextEstimate) +
+        fileResult.totalTokens +
+        estimateTokens(fileDiffs[file] ?? "") / hunks.length +
+        estimateTokens(fileMemoryContext);
+      const projectedCost = estimateCost(
+        modelConfig.provider,
+        modelConfig.id,
+        perHunkInputEstimate * hunks.length,
+        outputEstimate * hunks.length,
+      );
+      if (config.costBudgetUsd !== undefined && config.costBudgetUsd >= 0) {
+        const sessionCost = getSessionCost(cwd).costUsd;
+        if (sessionCost + projectedCost > config.costBudgetUsd) {
+          return {
+            action: "review",
+            error: `Hunk-based review would exceed the configured cost budget (${formatCost(config.costBudgetUsd)}).`,
+          };
+        }
+      }
+      reserveCost(cwd, projectedCost);
+
+      const hunkTasks = hunks.map((hunk) => async () => {
+        const result = await runReviewBatch({
+          cwd,
+          description,
+          files: fileResult.entries,
+          diff: hunk,
+          vcs,
+          criteria: state.plan?.acceptanceCriteria?.join("\n"),
+          currentStep,
+          sessionContext,
+          conventionsText,
+          preReviewOutput,
+          memoryContext: fileMemoryContext,
+          relatedContext,
+          truncated,
+          droppedFiles: droppedForBudget,
+          budget: fileBudget,
+          modelConfig,
+          signal,
+          sessionManager: ctx.sessionManager,
+          relevantPaths: [file],
+          nativeJson,
+          ...toolLoopOptions(config),
+        });
+        return { review: result.review, usage: result.usage };
+      });
+
+      let outcomes: ConcurrencyOutcome<{ review: ReviewResult; usage: UsageCost }>[];
+      try {
+        outcomes = await runWithConcurrencyLimit(hunkTasks, maxConcurrency, signal);
+      } finally {
+        releaseCost(cwd, projectedCost);
+      }
+
+      const successes: { review: ReviewResult; usage: UsageCost }[] = [];
+      const failures: string[] = [];
+      for (const outcome of outcomes) {
+        if (outcome.ok) successes.push(outcome.value);
+        else failures.push(outcome.error instanceof Error ? outcome.error.message : String(outcome.error));
+      }
+
+      if (successes.length === 0) {
+        return { action: "review", error: failures.join("; "), model: modelProfile };
+      }
+
+      review = mergeReviewResults(successes.map((s) => s.review));
+      cost = successes.reduce<UsageCost | undefined>(
+        (acc, s) => (acc && s.usage ? mergeUsageCost(acc, s.usage) : s.usage),
+        undefined,
+      );
+      finalDiffTruncated = truncated;
+      finalDroppedFiles = [...fileResult.dropped, ...skippedDueToTruncation];
+
+      if (failures.length > 0) {
+        review.suggestions.unshift(`Review failed for ${failures.length} hunk(s): ${failures.join("; ")}`);
+        review.consensus = false;
+      }
+
+      logEvent(cwd, "info", "Hunk-based review completed", {
+        file,
+        hunkCount: hunks.length,
+        successCount: successes.length,
+        failureCount: failures.length,
+        provider: modelConfig.provider,
+        model: modelConfig.id,
+      });
+      usedHunkChunking = true;
+    }
+  }
+
+  if (!usedHunkChunking && shouldParallelize) {
     progress(
       7,
       STAGES.review,
@@ -343,7 +474,7 @@ export async function executeYooReview(
       model: modelConfig.id,
       estimatedCostUsd: cost?.estimatedCostUsd,
     });
-  } else {
+  } else if (!usedHunkChunking) {
     const fileResult =
       strategy === "diff-only"
         ? { entries: [] as FileContentEntry[], dropped: [] as string[], totalTokens: 0 }
@@ -427,6 +558,10 @@ export async function executeYooReview(
     }
   }
 
+  if (!review) {
+    return { action: "review", error: "Review could not be produced", model: modelProfile };
+  }
+
   progress(8, STAGES.review, "Review response received");
   if (changedFiles.length > 0) {
     const changedFilesSet = new Set(changedFiles);
@@ -444,6 +579,16 @@ export async function executeYooReview(
     }
   }
   recordIssues(cwd, review.issues);
+
+  if ((review.verdict === "needs-work" || review.verdict === "blocked") && review.issues.length > 0) {
+    const plan: string[] = [];
+    for (const issue of review.issues) {
+      const loc = issue.file ? `\`${issue.file}${issue.line ? `:${issue.line}` : ""}\`` : "the change";
+      const action = issue.suggestion || issue.issue;
+      plan.push(`Fix ${issue.severity} issue in ${loc}: ${action}`);
+    }
+    review.fixPlan = plan.filter((step, index) => index === 0 || step !== plan[index - 1]);
+  }
 
   if (finalDiffTruncated) review.truncated = true;
   if (finalDroppedFiles.length > 0) review.droppedFiles = finalDroppedFiles;

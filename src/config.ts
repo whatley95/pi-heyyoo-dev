@@ -86,6 +86,8 @@ export function loadHeyyooConfig(cwd: string): HeyyooConfig {
     reviewMaxConventionsTokens: 1000,
     reviewMaxMemoryTokens: 800,
     reviewStrategy: "auto",
+    verifyDoneClaims: true,
+    reviewReminderEdits: 3,
     docs: {
       sources: {},
       maxCharsPerSource: 8000,
@@ -154,6 +156,8 @@ const KNOWN_CONFIG_KEYS = new Set([
   "modelInfo",
   "processTimeoutMs",
   "testTimeoutMs",
+  "verifyDoneClaims",
+  "reviewReminderEdits",
   "docs",
 ]);
 
@@ -343,6 +347,8 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     modelInfo: mergeModelInfo(base.modelInfo, o.modelInfo),
     processTimeoutMs: pickOptionalNumber(o.processTimeoutMs, base.processTimeoutMs),
     testTimeoutMs: pickOptionalNumber(o.testTimeoutMs, base.testTimeoutMs),
+    verifyDoneClaims: typeof o.verifyDoneClaims === "boolean" ? o.verifyDoneClaims : base.verifyDoneClaims,
+    reviewReminderEdits: pickPositiveInteger(o.reviewReminderEdits ?? NaN, base.reviewReminderEdits ?? 3),
     docs: mergeDocs(base.docs, o.docs),
   };
 }

@@ -3,6 +3,7 @@ import type { YooToolResult } from "./types.js";
 import { Type } from "@sinclair/typebox";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
 import { setPiSessionId, clearPiSessionId } from "./secondary-model.js";
+import { getDiff } from "./diff-grabber.js";
 
 import { renderCall, renderResult } from "./render.js";
 import { resetCost } from "./cost-tracker.js";
@@ -107,18 +108,25 @@ export default function (pi: ExtensionAPI) {
       const toolName = typeof e?.toolName === "string" ? e.toolName : "";
       if (isFileWriteTool(toolName)) {
         recordFileEdit(ctx.cwd);
+        const config = loadHeyyooConfig(ctx.cwd);
         const editState = getEditTracker(ctx.cwd);
         const now = Date.now();
         const sessionState = getState(ctx.cwd);
         const lastSteer = sessionState.lastSteerAt ?? 0;
-        if ((editState.editsSinceLastReview >= 3 || editState.editsSinceLastDone >= 3) && now - lastSteer > 30_000) {
+        const reviewThreshold = config.reviewReminderEdits ?? 3;
+        if (
+          (editState.editsSinceLastReview >= reviewThreshold || editState.editsSinceLastDone >= 3) &&
+          now - lastSteer > 30_000
+        ) {
           sessionState.lastSteerAt = now;
           const reminders: string[] = [];
           if (editState.editsSinceLastDone >= 3) {
             reminders.push("call `yoo({ done: true })` to mark completed plan steps done");
           }
-          if (editState.editsSinceLastReview >= 3) {
-            reminders.push("call `yoo({ review: '...' })` to review the changes");
+          if (editState.editsSinceLastReview >= reviewThreshold) {
+            const { changedFiles } = getDiff(ctx.cwd, { maxDiffChars: config.reviewMaxDiffChars });
+            const fileList = changedFiles.length > 0 ? ` in: ${changedFiles.slice(0, 5).join(", ")}` : "";
+            reminders.push(`call \`yoo({ review: '...' })\` to review the changes${fileList}`);
           }
           pi.sendUserMessage(
             `WORKFLOW REMINDER: you have made ${editState.editsSinceLastDone} file edit(s) without updating the plan tracker. Please ${reminders.join(" and ")}.`,
@@ -340,7 +348,7 @@ export default function (pi: ExtensionAPI) {
             progress,
           );
         } else if (p.done !== undefined) {
-          result = { action: "done", done: executeYooDone(ctx.cwd, p.done) };
+          result = { action: "done", done: await executeYooDone(ctx.cwd, p.done, signal) };
         } else if (p.planUpdate !== undefined) {
           result = {
             action: "planUpdate",

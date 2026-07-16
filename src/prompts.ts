@@ -651,7 +651,10 @@ ${finalJsonBlock(
   "suggestions": ["improvement 1"],
   "consensus": false,
   "summary": "one-paragraph holistic assessment of the completed work",
-  "planStale": false
+  "planStale": false,
+  "completedStepIds": [1, 2],
+  "planUpdateSuggested": false,
+  "planUpdateReason": ""
 }`,
   nativeJson,
 )}
@@ -661,6 +664,8 @@ Rules:
 - issue "severity" must be one of: "high", "medium", "low"
 - "consensus" is true only when verdict is "pass" AND issues is empty
 - Set "planStale": true if the original plan contradicts the final code and the code is internally consistent. Judge the code on its own merits and note that the plan should be updated.
+- "completedStepIds" (optional): a list of 1-based plan step IDs that the current diff fully satisfies. Only include steps you are confident about. They must be contiguous from step 1 (e.g., [1,2,3] is valid; [1,3] is not). Do not include steps beyond the current diff or future work.
+- "planUpdateSuggested" (optional): set to true if the original plan contradicts the final code and the code is internally consistent. Explain briefly in "planUpdateReason".
 - Provide a real summary that captures the overall quality, not filler
 - Judge only against the original plan and acceptance criteria; do not introduce new requirements that were not part of the plan
 - If the original plan contradicts the actual code and the code is internally consistent, treat the plan as stale. Judge the code on its own merits and note that the plan should be updated.
@@ -738,8 +743,31 @@ Rules:
   };
 }
 
+function buildStepVerificationPromptImpl(stepDescription: string, diff: string): { system: string; user: string } {
+  return {
+    system: `${COMMON_SYSTEM_PREFIX}
+
+You are verifying whether a code change satisfies a specific plan step. Be conservative.
+
+Return only valid JSON matching this schema:
+{
+  "satisfied": true,
+  "reason": "brief explanation"
+}
+
+Rules:
+- "satisfied" is true only if the diff clearly and completely implements the step description.
+- If the diff is partial, unrelated, or missing required pieces, set "satisfied" to false.
+- "reason" should be one sentence explaining your decision.
+- Do not include markdown fences or commentary outside the JSON object.`,
+
+    user: `Plan step to verify:\n${stepDescription}\n\nDiff since the last plan update:\n${diff}\n\nDoes this diff fully satisfy the plan step?`,
+  };
+}
+
 export const buildPlanPrompt = memoizePromptBuilder(buildPlanPromptImpl);
 export const buildExplainPrompt = memoizePromptBuilder(buildExplainPromptImpl);
+export const buildStepVerificationPrompt = buildStepVerificationPromptImpl;
 // Review prompts include large, highly-dynamic diffs and file contents, so caching them
 // adds memory pressure and key-serialization cost for near-zero hit rates.
 export const buildAdaptiveReviewPrompt = buildAdaptiveReviewPromptImpl;
@@ -1030,6 +1058,14 @@ export function validateJudgeResult(data: unknown): JudgeResult | null {
   const result = castOrNull<JudgeResult>(JudgeResultSchema, data);
   if (!result) return null;
   normalizeIssueFields(result.issues);
+  if (result.completedStepIds) {
+    result.completedStepIds = Array.from(
+      new Set(result.completedStepIds.filter((id) => typeof id === "number" && Number.isFinite(id) && id >= 1)),
+    ).sort((a, b) => a - b);
+    if (result.completedStepIds.length === 0) {
+      delete result.completedStepIds;
+    }
+  }
   return result;
 }
 
@@ -1686,4 +1722,13 @@ export function salvagePlanFromMarkdown(raw: string, fallbackTask: string): impo
     todo: todos.slice(0, 10),
     acceptanceCriteria: criteria.slice(0, 5),
   };
+}
+
+export function parseStepVerificationResponse(raw: string): { satisfied: boolean; reason: string } | null {
+  const cleaned = raw.replace(/^\uFEFF/, "").trim();
+  const parsed = parseJsonResponse<{ satisfied?: unknown; reason?: unknown }>(cleaned);
+  if (!parsed) return null;
+  const satisfied = typeof parsed.satisfied === "boolean" ? parsed.satisfied : false;
+  const reason = typeof parsed.reason === "string" ? parsed.reason : "";
+  return { satisfied, reason };
 }

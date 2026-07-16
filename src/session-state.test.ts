@@ -12,6 +12,7 @@ import {
   markJudgeCompleted,
   getLastReviewedCommit,
   setLastReviewedCommit,
+  markStepsDoneByIds,
 } from "./session-state.js";
 import type { PlanResult } from "./types.js";
 
@@ -87,4 +88,28 @@ test("getProgress skips steps whose dependencies are not yet completed", () => {
   state.reviewedSteps = [true, false, false];
   // With completedSteps=1, next eligible is step two (depends on one) not step three.
   assert.equal(getProgress(cwd).nextStep, "step two");
+});
+
+test("markStepsDoneByIds advances contiguous completed steps", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  assert.equal(markStepsDoneByIds(cwd, [1, 2], true), 2);
+  assert.equal(getProgress(cwd).completed, 2);
+  assert.equal(getState(cwd).reviewedSteps[0], true);
+  assert.equal(getState(cwd).reviewedSteps[1], true);
+  assert.equal(getState(cwd).reviewedSteps[2], false);
+});
+
+test("markStepsDoneByIds stops at first gap", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  assert.equal(markStepsDoneByIds(cwd, [1, 3], true), 1);
+  assert.equal(getProgress(cwd).completed, 1);
+});
+
+test("markStepsDoneByIds ignores ids beyond total steps", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  assert.equal(markStepsDoneByIds(cwd, [1, 2, 3, 4, 5], true), 3);
+  assert.equal(getProgress(cwd).completed, 3);
 });

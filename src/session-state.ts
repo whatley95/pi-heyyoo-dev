@@ -59,6 +59,31 @@ export function markStepsComplete(cwd: string, count: number, reviewed = false):
   saveState(cwd, state);
 }
 
+export function markStepsDoneByIds(cwd: string, ids: number[], reviewed = true): number {
+  const state = getState(cwd);
+  if (state.totalSteps === 0 || ids.length === 0) return state.completedSteps;
+  const sorted = Array.from(new Set(ids.filter((id) => typeof id === "number" && Number.isFinite(id) && id >= 1))).sort(
+    (a, b) => a - b,
+  );
+  let target = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted[i] === i + 1) {
+      target = i + 1;
+    } else {
+      break;
+    }
+  }
+  if (target > 0) {
+    const newTarget = Math.min(target, state.totalSteps);
+    while (state.completedSteps < newTarget) {
+      state.completedSteps++;
+      state.reviewedSteps[state.completedSteps - 1] = reviewed;
+    }
+    saveState(cwd, state);
+  }
+  return state.completedSteps;
+}
+
 export function incrementReviewRounds(cwd: string): void {
   const state = getState(cwd);
   const idx = state.completedSteps;

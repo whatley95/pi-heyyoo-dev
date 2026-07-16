@@ -14,7 +14,7 @@ import {
 import { getPastIssuesForFiles } from "../review-memory.js";
 import { runPreReviewCommands, formatPreReviewOutput } from "../pre-review.js";
 import { calculateReviewBudget, estimateTokens } from "../token-budget.js";
-import { getState, buildReviewHistory } from "../session-state.js";
+import { getState, buildReviewHistory, getProgress, markStepsDoneByIds, getEditTracker } from "../session-state.js";
 import { logEvent } from "../logger.js";
 import {
   STAGES,
@@ -50,6 +50,13 @@ export async function executeYooJudge(
 
   const state = getState(cwd);
   const reviewHistory = buildReviewHistory(cwd);
+  const editTracker = getEditTracker(cwd);
+  const currentStepIndex = state.completedSteps;
+  const hasUnreviewedEdits =
+    editTracker.editsSinceLastReview > 0 &&
+    state.totalSteps > 0 &&
+    currentStepIndex < state.totalSteps &&
+    !state.reviewedSteps[currentStepIndex];
 
   progress(1, STAGES.judge, "Collecting diff and conventions…");
   const { diff, truncated, changedFiles } = getDiff(cwd, {
@@ -200,6 +207,13 @@ export async function executeYooJudge(
     }
   }
 
+  if (hasUnreviewedEdits) {
+    judge.unreviewedEdits = true;
+    judge.suggestions.push(
+      "There are unreviewed edits since the last yoo.review. Consider running yoo.review first, or treat this judgment as covering all changes.",
+    );
+  }
+
   if (finalDiffTruncated || finalDroppedFiles.length > 0) {
     judge.truncated = finalDiffTruncated;
     judge.droppedFiles = finalDroppedFiles;
@@ -215,6 +229,24 @@ export async function executeYooJudge(
     judge.suggestions.push(
       "Verdict was downgraded from 'blocked' to 'needs-work' because the judgment context was incomplete (truncated diff or omitted files); the judgment is inconclusive.",
     );
+  }
+
+  if (judge.verdict === "pass" && judge.consensus && judge.completedStepIds && judge.completedStepIds.length > 0) {
+    const state = getState(cwd);
+    if (state.totalSteps > 0) {
+      const previousCompleted = state.completedSteps;
+      const newCompleted = markStepsDoneByIds(cwd, judge.completedStepIds, true);
+      if (newCompleted > previousCompleted) {
+        const progress = getProgress(cwd);
+        judge.planProgress = `${progress.completed}/${progress.total} steps done`;
+        judge.nextStep = progress.nextStep;
+        logEvent(cwd, "info", "Judge auto-synced plan tracker", {
+          previousCompleted,
+          newCompleted,
+          completedStepIds: judge.completedStepIds,
+        });
+      }
+    }
   }
 
   return { action: "judge", judge, cost, model: modelProfile };

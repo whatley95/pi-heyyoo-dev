@@ -14,6 +14,7 @@ import { executeYooPlanUpdate } from "../actions/plan-update.js";
 import { executeYooReview } from "../actions/review.js";
 import { executeYooSuggest } from "../actions/suggest.js";
 import { executeYooRecommend } from "../actions/recommend.js";
+import { executeYooDone } from "../actions/done.js";
 import { executeYooJudge } from "../actions/judge.js";
 import { executeYooTest } from "../actions/test.js";
 import { executeYooSecurity } from "../actions/security.js";
@@ -23,7 +24,7 @@ import { executeYooExplain } from "../yoo-explain.js";
 import { handleYooSearchCommand } from "../yoo-search.js";
 import { handleYooSearchConfigCommand } from "../yoo-search-config.js";
 import { loadHeyyooConfig, resolveTaskModel } from "../config.js";
-import { getState, markStepComplete, getProgress, dropSessionState, markJudgeCompleted } from "../session-state.js";
+import { getState, getProgress, dropSessionState, markJudgeCompleted } from "../session-state.js";
 import { clearState } from "../plan-store.js";
 import { resetCost, getSessionCost, formatCost } from "../cost-tracker.js";
 import { clearMemory } from "../review-memory.js";
@@ -785,32 +786,18 @@ export function registerYooCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
         ctx.ui.notify("All plan steps are already complete. Run /yoo judge for a final review.", "info");
         return;
       }
-      markStepComplete(ctx.cwd);
-      const newProgress = getProgress(ctx.cwd);
-      ctx.ui.notify(`Step ${planProgress.completed + 1} marked complete.`, "info");
-      const situation = `Plan progress: ${newProgress.completed}/${newProgress.total} steps completed. Current step: ${newProgress.nextStep ?? "none"}`;
-      const progress = createProgressReporter("recommend", ctx);
-      const notifyProgress = (stage: number, total: number, message: string) => {
-        progress(stage, total, message);
-        ctx.ui.notify(`[${stage}/${total}] ${message}`, "info");
-      };
-      const result = await executeYooRecommend(ctx.cwd, situation, signal, notifyProgress, ctx.sessionManager);
+      const doneResult = await executeYooDone(ctx.cwd, undefined, signal);
       clearYooStatus(ctx);
-      const text = formatResultText(result);
-      ctx.ui.notify(text.slice(0, 500), result.error ? "error" : "info");
+      const text = formatResultText({ action: "done", done: doneResult });
+      ctx.ui.notify(text.slice(0, 500), doneResult.verified === false ? "warn" : "info");
 
-      if (
-        config.autoJudge &&
-        !getState(ctx.cwd).judgeCompleted &&
-        newProgress.completed === newProgress.total &&
-        newProgress.total > 0
-      ) {
+      if (config.autoJudge && !getState(ctx.cwd).judgeCompleted && doneResult.allDone && doneResult.totalSteps > 0) {
         const judgeNotify = (stage: number, _total: number, message: string) => {
           ctx.ui.notify(`[${stage}/10] ${message}`, "info");
         };
         const judgeResult = await executeYooJudge(
           ctx.cwd,
-          `All ${newProgress.total} plan steps completed.`,
+          `All ${doneResult.totalSteps} plan steps completed.`,
           signal,
           judgeNotify,
           ctx.sessionManager,

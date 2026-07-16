@@ -583,6 +583,32 @@ describe("validateJudgeResult", () => {
     assert.ok(result);
     assert.equal(result!.issues.length, 0);
   });
+
+  it("normalizes completedStepIds to sorted unique positive integers", () => {
+    const result = validateJudgeResult({
+      verdict: "pass",
+      issues: [],
+      suggestions: [],
+      consensus: true,
+      summary: "all good",
+      completedStepIds: [3, 1, 2, 1, -1, 0, NaN, Infinity, "x"],
+    });
+    assert.ok(result);
+    assert.deepEqual(result!.completedStepIds, [1, 2, 3]);
+  });
+
+  it("removes completedStepIds when no valid ids remain", () => {
+    const result = validateJudgeResult({
+      verdict: "pass",
+      issues: [],
+      suggestions: [],
+      consensus: true,
+      summary: "all good",
+      completedStepIds: [-1, 0, NaN, "x"],
+    });
+    assert.ok(result);
+    assert.equal(result!.completedStepIds, undefined);
+  });
 });
 
 describe("prompt caching", () => {

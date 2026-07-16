@@ -56,3 +56,71 @@ test("formatResultText shows elapsed as a standalone line when cost is absent", 
   assert.ok(text.includes("took 423ms"));
   assert.ok(!text.includes("in ·"));
 });
+
+test("formatResultText renders done verification failure", () => {
+  const text = formatResultText({
+    action: "done",
+    done: {
+      completedStep: 0,
+      totalSteps: 3,
+      allDone: false,
+      verified: false,
+      verificationReason: "missing styles",
+      message: "Step 1 does not appear to be complete.",
+    },
+  });
+  assert.ok(text.includes("Verification failed"));
+  assert.ok(text.includes("missing styles"));
+});
+
+test("formatResultText renders judge unreviewed-edits warning", () => {
+  const text = formatResultText({
+    action: "judge",
+    judge: {
+      verdict: "pass",
+      issues: [],
+      suggestions: [],
+      consensus: true,
+      summary: "Looks good",
+      unreviewedEdits: true,
+    },
+  });
+  assert.ok(text.includes("Unreviewed edits"));
+});
+
+test("formatResultText renders judge plan-update suggestion", () => {
+  const text = formatResultText({
+    action: "judge",
+    judge: {
+      verdict: "pass",
+      issues: [],
+      suggestions: [],
+      consensus: true,
+      summary: "Looks good",
+      planUpdateSuggested: true,
+      planUpdateReason: "plan describes old API",
+    },
+  });
+  assert.ok(text.includes("Plan stale"));
+  assert.ok(text.includes("old API"));
+  assert.ok(text.includes("yoo-plan-update"));
+});
+
+test("formatResultText renders review fix plan", () => {
+  const text = formatResultText({
+    action: "review",
+    review: {
+      verdict: "needs-work",
+      issues: [
+        { severity: "medium", file: "src/a.ts", line: 5, issue: "bad name", suggestion: "rename to foo" },
+        { severity: "low", file: "src/b.ts", issue: "typo", suggestion: "fix spelling" },
+      ],
+      suggestions: [],
+      consensus: false,
+      fixPlan: ["Fix medium issue in `src/a.ts:5`: rename to foo", "Fix low issue in `src/b.ts`: fix spelling"],
+    },
+  });
+  assert.ok(text.includes("Suggested fix plan"));
+  assert.ok(text.includes("rename to foo"));
+  assert.ok(text.includes("fix spelling"));
+});

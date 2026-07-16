@@ -48,6 +48,10 @@ export interface HeyyooConfig {
   processTimeoutMs?: number;
   /** Timeout in ms per model in /yoo test (default 120000 = 2 min). */
   testTimeoutMs?: number;
+  /** Verify yoo.done claims against the diff before advancing the tracker. Default true. */
+  verifyDoneClaims?: boolean;
+  /** Number of file edits since last review before showing a workflow reminder. Default 3. */
+  reviewReminderEdits?: number;
 }
 
 export interface PlanStep {
@@ -96,6 +100,7 @@ export interface ReviewResult {
   contextLimited?: boolean;
   planStale?: boolean;
   completedSteps?: number;
+  fixPlan?: string[];
 }
 
 export interface Approach {
@@ -117,6 +122,10 @@ export interface RecommendResult {
 
 export interface JudgeResult extends ReviewResult {
   summary: string;
+  completedStepIds?: number[];
+  planUpdateSuggested?: boolean;
+  planUpdateReason?: string;
+  unreviewedEdits?: boolean;
 }
 
 export interface TestFinding {
@@ -295,4 +304,6 @@ export interface DoneResult {
   nextStep?: string;
   allDone: boolean;
   message: string;
+  verified?: boolean;
+  verificationReason?: string;
 }

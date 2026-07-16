@@ -393,6 +393,34 @@ export function extractChangedFiles(diff: string, vcs: VcsType): string[] {
   return [...files];
 }
 
+export function splitDiffByHunk(fileDiff: string): string[] {
+  const lines = fileDiff.split(/\r?\n/);
+  const hunks: string[] = [];
+  const headerLines: string[] = [];
+  let currentHunk: string[] = [];
+  let inHunk = false;
+
+  for (const line of lines) {
+    if (/^@@\s+[-+]\d+/.test(line)) {
+      if (inHunk && currentHunk.length > 0) {
+        hunks.push([...headerLines, ...currentHunk].join("\n"));
+      }
+      inHunk = true;
+      currentHunk = [line];
+    } else if (inHunk) {
+      currentHunk.push(line);
+    } else {
+      headerLines.push(line);
+    }
+  }
+
+  if (inHunk && currentHunk.length > 0) {
+    hunks.push([...headerLines, ...currentHunk].join("\n"));
+  }
+
+  return hunks.length > 0 ? hunks : [fileDiff];
+}
+
 export function splitDiffByFile(diff: string, vcs?: VcsType): Record<string, string> {
   const result: Record<string, string> = {};
   if (!diff.trim()) return result;
