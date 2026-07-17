@@ -106,17 +106,6 @@ describe("resolveTaskModel", () => {
     assert.equal(result.backend, "pi");
   });
 
-  it("supports planUpdate taskModel override", () => {
-    const config: HeyyooConfig = {
-      ...baseConfig,
-      taskModels: { planUpdate: { provider: "anthropic", id: "claude-sonnet-4" } },
-    };
-    const result = resolveTaskModel(config, "planUpdate");
-    assert.equal(result.provider, "anthropic");
-    assert.equal(result.id, "claude-sonnet-4");
-    assert.equal(result.thinking, "off");
-  });
-
   it("preserves sdk backend override", () => {
     const config: HeyyooConfig = {
       ...baseConfig,

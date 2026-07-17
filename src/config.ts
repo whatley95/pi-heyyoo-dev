@@ -69,8 +69,8 @@ function mergeSecondary(base: SecondaryModelConfig, override: unknown): Secondar
 
 export function resolveTaskModel(config: HeyyooConfig, action: YooModelTask): SecondaryModelConfig {
   const override = config.taskModels?.[action];
-  if (!override) return config.secondary;
-  return mergeSecondary(config.secondary, override);
+  if (override) return mergeSecondary(config.secondary, override);
+  return config.secondary;
 }
 
 export function loadHeyyooConfig(cwd: string): HeyyooConfig {
@@ -240,9 +240,8 @@ const VALID_YOO_MODEL_TASKS = new Set<string>([
   "scan",
   "test",
   "security",
-  "explain",
   "done",
-  "planUpdate",
+  "explain",
 ]);
 
 function mergeTaskModels(base: HeyyooConfig["taskModels"], override: unknown): HeyyooConfig["taskModels"] {

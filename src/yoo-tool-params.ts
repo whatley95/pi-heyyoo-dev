@@ -12,7 +12,18 @@ export const YOO_ACTIONS: YooAction[] = [
   "done",
   "planUpdate",
 ];
-export const YOO_MODEL_TASKS: YooModelTask[] = [...YOO_ACTIONS, "explain"];
+export const YOO_MODEL_TASKS: YooModelTask[] = [
+  "plan",
+  "review",
+  "suggest",
+  "recommend",
+  "judge",
+  "scan",
+  "test",
+  "security",
+  "done",
+  "explain",
+];
 
 interface ValidatedParams {
   ok: true;

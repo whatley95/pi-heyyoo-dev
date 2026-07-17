@@ -1,8 +1,10 @@
 export type YooAction =
   "plan" | "review" | "suggest" | "recommend" | "judge" | "scan" | "test" | "security" | "done" | "planUpdate";
 
-/** Tasks that can have a per-model override in settings.json. Includes yoo tool actions plus separate tools like explain. */
-export type YooModelTask = YooAction | "explain";
+/** Tasks that can have a per-model override in settings.json.
+ *  planUpdate intentionally shares the plan model, so it is not selectable separately. */
+export type YooModelTask =
+  "plan" | "review" | "suggest" | "recommend" | "judge" | "scan" | "test" | "security" | "done" | "explain";
 
 import type { BackendType } from "./types/secondary-model.js";
 export type {

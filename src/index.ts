@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { YooToolResult } from "./types.js";
+import type { YooToolResult, YooModelTask } from "./types.js";
 import { Type } from "@sinclair/typebox";
 import { loadHeyyooConfig, resolveTaskModel } from "./config.js";
 import { setPiSessionId, clearPiSessionId } from "./secondary-model.js";
@@ -287,7 +287,8 @@ export default function (pi: ExtensionAPI) {
       const config = loadHeyyooConfig(ctx.cwd);
 
       const start = Date.now();
-      const progress = createProgressReporter(action, ctx, onUpdate);
+      const progressAction = (action === "planUpdate" ? "plan" : action) as YooModelTask;
+      const progress = createProgressReporter(progressAction, ctx, onUpdate);
       let result: YooToolResult;
 
       try {

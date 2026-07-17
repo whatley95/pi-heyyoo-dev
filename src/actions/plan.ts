@@ -15,7 +15,7 @@ import {
 } from "./shared.js";
 import { logEvent } from "../logger.js";
 import type { ProgressReporter } from "../progress.js";
-import type { YooToolResult, UsageCost } from "../types.js";
+import type { YooToolResult, UsageCost, YooModelTask } from "../types.js";
 
 export async function executeYooPlan(
   cwd: string,
@@ -23,9 +23,10 @@ export async function executeYooPlan(
   signal: AbortSignal | undefined,
   progress: ProgressReporter,
   sessionManager?: ExtensionContext["sessionManager"],
+  modelTask: YooModelTask = "plan",
 ): Promise<YooToolResult> {
   const config = loadHeyyooConfig(cwd);
-  const modelConfig = resolveTaskModel(config, "plan");
+  const modelConfig = resolveTaskModel(config, modelTask);
   if (!modelConfig.provider || !modelConfig.id) {
     return { action: "plan", error: "No secondary model configured. Set pi-heyyoo.secondary in settings.json." };
   }
@@ -52,7 +53,7 @@ export async function executeYooPlan(
       thinking: modelConfig.thinking,
       cwd,
       sessionManager,
-      task: "plan",
+      task: modelTask,
       structuredOutput: true,
       onStreamProgress: createStreamProgressCallback(progress, 2, STAGES.plan),
     });
