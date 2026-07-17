@@ -123,10 +123,7 @@ export async function executeYooSecurity(
   const fileContents = mapFileContentEntries(fileResult.entries);
 
   const systemPromptEstimate = 1000;
-  const remainingForDiff = Math.max(
-    0,
-    budget.availableInputTokens - fileResult.totalTokens - systemPromptEstimate,
-  );
+  const remainingForDiff = Math.max(0, budget.availableInputTokens - fileResult.totalTokens - systemPromptEstimate);
   const diffTokens = estimateTokens(diff);
   const finalDiff = diffTokens > remainingForDiff ? diff.slice(0, remainingForDiff * 4) + "\n... diff truncated" : diff;
 

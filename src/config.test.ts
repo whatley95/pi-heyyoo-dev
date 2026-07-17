@@ -94,6 +94,29 @@ describe("resolveTaskModel", () => {
     assert.equal(result.provider, "openai");
   });
 
+  it("supports done taskModel override", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { done: { provider: "deepseek", id: "deepseek-chat", thinking: "off" } },
+    };
+    const result = resolveTaskModel(config, "done");
+    assert.equal(result.provider, "deepseek");
+    assert.equal(result.id, "deepseek-chat");
+    assert.equal(result.thinking, "off");
+    assert.equal(result.backend, "pi");
+  });
+
+  it("supports planUpdate taskModel override", () => {
+    const config: HeyyooConfig = {
+      ...baseConfig,
+      taskModels: { planUpdate: { provider: "anthropic", id: "claude-sonnet-4" } },
+    };
+    const result = resolveTaskModel(config, "planUpdate");
+    assert.equal(result.provider, "anthropic");
+    assert.equal(result.id, "claude-sonnet-4");
+    assert.equal(result.thinking, "off");
+  });
+
   it("preserves sdk backend override", () => {
     const config: HeyyooConfig = {
       ...baseConfig,

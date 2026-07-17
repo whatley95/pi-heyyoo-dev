@@ -241,6 +241,8 @@ const VALID_YOO_MODEL_TASKS = new Set<string>([
   "test",
   "security",
   "explain",
+  "done",
+  "planUpdate",
 ]);
 
 function mergeTaskModels(base: HeyyooConfig["taskModels"], override: unknown): HeyyooConfig["taskModels"] {
