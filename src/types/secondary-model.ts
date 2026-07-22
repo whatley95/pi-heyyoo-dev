@@ -78,6 +78,9 @@ export interface PiProcessResult {
   // Track the last message_update event's message and assistantMessageEvent for fallback.
   lastAssistantMessageEvent?: Record<string, unknown>;
   lastMessageUpdateText?: string;
+  // Track the last stopReason seen on any streamed/partial assistant message, used as a
+  // fallback when no final assistant message is present in `messages`.
+  lastStopReason?: unknown;
   // Track error messages from assistant messages that failed (stopReason === "error" / "aborted").
   lastErrorMessage?: string;
 }

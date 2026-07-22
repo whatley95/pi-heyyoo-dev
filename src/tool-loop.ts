@@ -97,6 +97,10 @@ function formatToolResult(request: ToolRequest, result: ToolResult): string {
   return `\n\n## Tool result: ${description}\n${body}\n\nYou may request another tool or produce the final structured JSON result.`;
 }
 
+// NOTE: The tool-loop path is intentionally excluded from length-truncation continuation
+// handling (see callWithContinuation in secondary-model.ts). The tool-loop manages its own
+// multi-turn flow (tool requests/results) and decides when the final structured result is
+// complete, so length-truncation continuation does not apply here.
 export async function executeToolLoop(
   cwd: string,
   systemPrompt: string,

@@ -7,7 +7,7 @@ import { getCachedOAuthApiKey, setCachedOAuthApiKey } from "../oauth-cache.js";
 import type { CallSecondaryModelOptions } from "../types.js";
 import type { SecondaryModelConfig } from "../types/secondary-model.js";
 import { getPiSessionId } from "./pi-backend.js";
-import { buildUsage, applyReportedUsage, extractTextFromContent } from "./shared.js";
+import { buildUsage, applyReportedUsage, extractTextFromContent, isLengthStop } from "./shared.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -236,7 +236,7 @@ export async function callSdkBackend(
     modelInfoOverride?: Partial<ReturnType<typeof resolveModelInfo>>;
     sdkModelInfo?: Partial<ReturnType<typeof resolveModelInfo>>;
   },
-): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
+): Promise<{ content: string; usage: ReturnType<typeof buildUsage>; truncated?: boolean }> {
   const { signal, thinking, cwd, secondary, modelInfoOverride, sdkModelInfo } = options;
 
   // Prefer pi-heyyoo's auth resolution (auth.json with indirection, env vars,
@@ -350,12 +350,18 @@ export async function callSdkBackend(
     throw new Error(`Secondary model returned no extractable text (stopReason: ${message.stopReason ?? "unknown"})`);
   }
 
+  // stopReason "length" means the model hit its output-token cap before finishing.
+  // Surface that so the caller can issue a continuation call instead of returning
+  // an incomplete response silently.
+  const truncated = isLengthStop(message.stopReason);
+
   const usage = buildUsage(provider, model, systemPrompt, userPrompt, content);
   if (message.usage) {
     return {
       content,
       usage: applyReportedUsage(provider, model, usage, message.usage.input, message.usage.output),
+      truncated,
     };
   }
-  return { content, usage };
+  return { content, usage, truncated };
 }

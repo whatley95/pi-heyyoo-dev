@@ -1,7 +1,7 @@
 import { resolveModelInfo } from "../model-registry.js";
 import type { ProviderApiInfo } from "../types/secondary-model.js";
 import { getPiSessionId } from "./pi-backend.js";
-import { buildUsage, applyReportedUsage } from "./shared.js";
+import { buildUsage, applyReportedUsage, isLengthStop } from "./shared.js";
 
 interface AnthropicSseEvent {
   type: string;
@@ -151,7 +151,7 @@ async function callOpenAiCompatibleApi(
   cwd?: string,
   sessionId?: string,
   structuredOutput = false,
-): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
+): Promise<{ content: string; usage: ReturnType<typeof buildUsage>; truncated?: boolean }> {
   const url = buildOpenAiUrl(apiInfo, apiKey);
 
   const supportsReasoning = supportsReasoningEffort(provider, model);
@@ -286,6 +286,10 @@ async function callOpenAiCompatibleApi(
     );
   }
 
+  // finish_reason "length" means the model stopped early because it hit the output-token cap.
+  // Surface that so the caller can issue a continuation call instead of returning incomplete content silently.
+  const truncated = isLengthStop(choice.finish_reason);
+
   const usage = applyReportedUsage(
     provider,
     model,
@@ -294,7 +298,7 @@ async function callOpenAiCompatibleApi(
     data.usage?.completion_tokens,
   );
 
-  return { content, usage };
+  return { content, usage, truncated };
 }
 
 async function callAnthropicApi(
@@ -309,7 +313,7 @@ async function callAnthropicApi(
   modelInfoOverride?: Partial<ReturnType<typeof resolveModelInfo>>,
   sessionId?: string,
   structuredOutput = false,
-): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
+): Promise<{ content: string; usage: ReturnType<typeof buildUsage>; truncated?: boolean }> {
   const url = `${apiInfo.baseUrl}/messages`;
 
   const thinkingEnabled =
@@ -385,6 +389,7 @@ async function callAnthropicApi(
     let thinkingText = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    let stopReason: string | undefined;
     for await (const event of readAnthropicSseStream(response, signal)) {
       if (event.type === "content_block_delta") {
         const delta = event.delta;
@@ -405,6 +410,12 @@ async function callAnthropicApi(
         if (typeof usage?.input_tokens === "number") inputTokens = usage.input_tokens;
         if (typeof usage?.output_tokens === "number") outputTokens = usage.output_tokens;
       } else if (event.type === "message_delta") {
+        // Anthropic carries the final stop_reason in `delta.stop_reason` and the
+        // final usage in `usage` on the `message_delta` event.
+        const delta = event.delta;
+        if (delta && typeof delta.stop_reason === "string") {
+          stopReason = delta.stop_reason;
+        }
         const usage = event.usage;
         if (typeof usage?.input_tokens === "number") inputTokens = usage.input_tokens;
         if (typeof usage?.output_tokens === "number") outputTokens = usage.output_tokens;
@@ -414,6 +425,7 @@ async function callAnthropicApi(
     if (finalText.length === 0) {
       throw new Error("Empty response from secondary model stream");
     }
+    const truncated = isLengthStop(stopReason);
     const usage = applyReportedUsage(
       provider,
       model,
@@ -421,7 +433,7 @@ async function callAnthropicApi(
       inputTokens || undefined,
       outputTokens || undefined,
     );
-    return { content: finalText, usage };
+    return { content: finalText, usage, truncated };
   }
 
   // Non-streaming fallback for proxies that return JSON even when stream: true is requested.
@@ -429,6 +441,7 @@ async function callAnthropicApi(
     content?: Array<{ type: string; text?: string; thinking?: string }>;
     usage?: { input_tokens?: number; output_tokens?: number };
     error?: { message?: string };
+    stop_reason?: string;
   };
 
   if (data.error?.message) {
@@ -450,7 +463,7 @@ async function callAnthropicApi(
     data.usage?.output_tokens,
   );
 
-  return { content: textContent, usage };
+  return { content: textContent, usage, truncated: isLengthStop(data.stop_reason) };
 }
 
 function modelSupportsAnthropicThinking(provider: string, model: string): boolean {
@@ -619,7 +632,7 @@ export async function callHttpBackend(
   modelInfoOverride?: Partial<ReturnType<typeof resolveModelInfo>>,
   cwd?: string,
   structuredOutput?: boolean,
-): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
+): Promise<{ content: string; usage: ReturnType<typeof buildUsage>; truncated?: boolean }> {
   const sessionId = cwd ? getPiSessionId(cwd) : undefined;
   if (apiInfo.style === "anthropic") {
     return callAnthropicApi(

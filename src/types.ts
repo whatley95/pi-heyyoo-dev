@@ -50,6 +50,8 @@ export interface HeyyooConfig {
   processTimeoutMs?: number;
   /** Timeout in ms per model in /yoo test (default 120000 = 2 min). */
   testTimeoutMs?: number;
+  /** Maximum continuation calls when a secondary-model response is length-truncated (default 3). */
+  maxContinuations?: number;
   /** Verify yoo.done claims against the diff before advancing the tracker. Default true. */
   verifyDoneClaims?: boolean;
   /** Number of file edits since last review before showing a workflow reminder. Default 3. */

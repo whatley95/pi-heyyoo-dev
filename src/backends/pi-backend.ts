@@ -10,6 +10,7 @@ import {
   estimateTokens,
   buildUsage,
   extractTextFromContent,
+  isLengthStop,
   type AssistantMessageLike,
   type PiProcessResult,
 } from "./shared.js";
@@ -254,6 +255,11 @@ function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string):
       if (text.length > 0) {
         result.lastMessageUpdateText = text;
       }
+      // Capture stopReason from partial assistant messages so truncation can be
+      // detected even when no final assistant message is present in `messages`.
+      if (partial.stopReason !== undefined && partial.stopReason !== null) {
+        result.lastStopReason = partial.stopReason;
+      }
     }
   }
   accumulateDelta(event);
@@ -272,6 +278,10 @@ function processPiJsonLine(line: string, result: PiProcessResult, cwd?: string):
     const text = extractTextFromContent(message.content);
     if (text.length > 0) {
       result.lastMessageUpdateText = text;
+    }
+    // Capture stopReason from partial messages as a fallback for truncation detection.
+    if (message.stopReason !== undefined && message.stopReason !== null) {
+      result.lastStopReason = message.stopReason;
     }
   }
 
@@ -475,7 +485,7 @@ export async function callPiBackend(
   systemPrompt: string,
   userPrompt: string,
   options: CallSecondaryModelOptions = {},
-): Promise<{ content: string; usage: ReturnType<typeof buildUsage> }> {
+): Promise<{ content: string; usage: ReturnType<typeof buildUsage>; truncated?: boolean }> {
   const { signal, thinking, cwd, sessionManager, relevantPaths } = options;
 
   const config = cwd ? loadHeyyooConfig(cwd) : undefined;
@@ -553,6 +563,10 @@ export async function callPiBackend(
         const result = await runPiProcess(command, [...prefixArgs, ...args], cwd, signal, processTimeoutMs);
         const content = getFinalAssistantText(result);
         if (content) {
+          // Detect truncation from the final assistant message's stopReason, falling
+          // back to the last stopReason seen on a streamed/partial message.
+          const lastAssistant = [...result.messages].reverse().find((m) => m.role === "assistant");
+          const truncated = isLengthStop(lastAssistant?.stopReason ?? result.lastStopReason);
           const estimatedInputTokens = result.inputTokens ?? estimateTokens(systemPrompt + userPrompt);
           const estimatedOutputTokens = result.outputTokens ?? estimateTokens(content);
           const usage = {
@@ -561,7 +575,7 @@ export async function callPiBackend(
             estimatedCostUsd: result.cost ?? estimateCost(provider, model, estimatedInputTokens, estimatedOutputTokens),
             sessionCostUsd: 0,
           };
-          return { content, usage };
+          return { content, usage, truncated };
         }
         // No assistant text — collect diagnostics and retry.
         const stderrPreview = result.stderr.trim().slice(0, 500);

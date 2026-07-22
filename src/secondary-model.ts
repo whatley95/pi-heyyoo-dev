@@ -4,6 +4,7 @@ import { formatCost, getSessionCost } from "./cost-tracker.js";
 import { logEvent } from "./logger.js";
 import { resolveModelInfo } from "./model-registry.js";
 import { executeToolLoop } from "./tool-loop.js";
+import { mergeUsageCost } from "./actions/shared.js";
 import {
   callHttpBackend,
   callPiBackend,
@@ -261,8 +262,216 @@ async function runSingleAttempt(
   };
 
   if (options.enableToolLoop && cwd) {
+    // NOTE: The tool-loop path is intentionally excluded from continuation handling.
+    // It manages its own multi-turn flow (tool requests/results) and decides when the
+    // final structured result is complete, so length-truncation continuation does not apply.
     return executeToolLoop(cwd, systemPrompt, userPrompt, options, doCall, options.maxToolIterations);
   }
 
-  return doCall(systemPrompt, userPrompt, options);
+  const maxContinuations =
+    typeof config?.maxContinuations === "number" && config.maxContinuations >= 0
+      ? Math.floor(config.maxContinuations)
+      : DEFAULT_MAX_CONTINUATIONS;
+
+  return callWithContinuation(
+    cwd,
+    provider,
+    model,
+    systemPrompt,
+    userPrompt,
+    options,
+    doCall,
+    maxContinuations,
+    config?.costBudgetUsd,
+  );
+}
+
+const DEFAULT_MAX_CONTINUATIONS = 3;
+const RESUME_ANCHOR_CHARS = 2000;
+const MIN_PROGRESS_CHARS = 16;
+
+const CONTINUATION_INSTRUCTION =
+  "Continue your previous response exactly where it left off. Do not repeat what you already wrote; output only the remaining content. If the response was already complete, output nothing.";
+
+/**
+ * Detect length-truncated backend responses and concatenate continuation calls
+ * so callers receive a complete response. Up to `maxContinuations` (default
+ * DEFAULT_MAX_CONTINUATIONS) follow-up calls
+ * are made; after that the best-effort concatenated content is returned with a
+ * warning logged. Continuation is skipped when the tool-use loop is enabled,
+ * because the tool-loop handles its own multi-turn flow.
+ */
+async function callWithContinuation(
+  cwd: string | undefined,
+  provider: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  options: CallSecondaryModelOptions,
+  doCall: (
+    sys: string,
+    user: string,
+    opts: Omit<CallSecondaryModelOptions, "enableToolLoop" | "maxToolIterations">,
+  ) => Promise<{ content: string; usage: UsageCost; truncated?: boolean }>,
+  maxContinuations: number,
+  costBudgetUsd: number | undefined,
+): Promise<{ content: string; usage: UsageCost }> {
+  const {
+    content: firstContent,
+    usage: firstUsage,
+    truncated: firstTruncated,
+  } = await doCall(systemPrompt, userPrompt, options);
+  if (!firstTruncated) return { content: firstContent, usage: firstUsage };
+
+  return runContinuationLoop(
+    cwd,
+    provider,
+    model,
+    systemPrompt,
+    options,
+    doCall,
+    maxContinuations,
+    costBudgetUsd,
+    firstContent,
+    firstUsage,
+    true,
+  );
+}
+
+async function runContinuationLoop(
+  cwd: string | undefined,
+  provider: string,
+  model: string,
+  systemPrompt: string,
+  options: CallSecondaryModelOptions,
+  doCall: (
+    sys: string,
+    user: string,
+    opts: Omit<CallSecondaryModelOptions, "enableToolLoop" | "maxToolIterations">,
+  ) => Promise<{ content: string; usage: UsageCost; truncated?: boolean }>,
+  maxContinuations: number,
+  costBudgetUsd: number | undefined,
+  combined: string,
+  totalUsage: UsageCost,
+  truncated: boolean,
+): Promise<{ content: string; usage: UsageCost }> {
+  // Capture the session cost once at the start; the action executor records cost
+  // AFTER callSecondaryModel returns, so getSessionCost won't reflect in-flight calls.
+  // We track the continuation's own accumulated cost via totalUsage.estimatedCostUsd.
+  const sessionCostAtStart = cwd ? getSessionCost(cwd).costUsd : 0;
+  for (let i = 0; i < maxContinuations && truncated; i++) {
+    // Re-check the cost budget between rounds so continuation cannot silently
+    // exceed costBudgetUsd (the pre-check in runSingleAttempt only estimates one call).
+    if (cwd && costBudgetUsd !== undefined && costBudgetUsd >= 0) {
+      const inFlightCost = sessionCostAtStart + totalUsage.estimatedCostUsd;
+      if (inFlightCost > costBudgetUsd) {
+        logEvent(cwd, "warn", "Continuation stopped; cost budget reached", {
+          provider,
+          model,
+          continuation: i + 1,
+          inFlightCostUsd: formatCost(inFlightCost),
+          budgetUsd: formatCost(costBudgetUsd),
+        });
+        return { content: combined, usage: totalUsage };
+      }
+    }
+
+    if (cwd) {
+      logEvent(cwd, "info", "Secondary model response truncated; issuing continuation call", {
+        provider,
+        model,
+        continuation: i + 1,
+        max: maxContinuations,
+      });
+    }
+
+    // Echo only the tail of the accumulated content as a resume anchor to avoid
+    // quadratic input-token growth across rounds.
+    const anchor = combined.slice(-RESUME_ANCHOR_CHARS);
+    const continued = `${CONTINUATION_INSTRUCTION}\n\n=== Last content (do not repeat) ===\n${anchor}`;
+    let nextResult: { content: string; usage: UsageCost; truncated?: boolean };
+    try {
+      nextResult = await doCall(systemPrompt, continued, options);
+    } catch (err) {
+      if (cwd) {
+        logEvent(cwd, "warn", "Continuation call failed; returning best-effort content", {
+          provider,
+          model,
+          continuation: i + 1,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return { content: combined, usage: totalUsage };
+    }
+    const nextContent = nextResult.content ?? "";
+    if (nextContent.trim().length === 0) {
+      // The model reported it had nothing more to add. Merge usage and stop; re-sending
+      // the same prompt would burn another call for no new content.
+      totalUsage = mergeUsageCost(totalUsage, nextResult.usage);
+      truncated = false;
+      break;
+    }
+    // Avoid accidental duplication: drop a leading overlap of the same text.
+    const deduped = stripLeadingOverlap(combined, nextContent);
+    combined += deduped;
+    truncated = nextResult.truncated ?? false;
+    totalUsage = mergeUsageCost(totalUsage, nextResult.usage);
+
+    // No-progress guard: if this round added almost nothing after dedup, stop
+    // to avoid burning the remaining rounds for no gain.
+    if (deduped.trim().length < MIN_PROGRESS_CHARS) {
+      truncated = false;
+      if (cwd) {
+        logEvent(cwd, "info", "Continuation made no progress; stopping early", {
+          provider,
+          model,
+          continuation: i + 1,
+          addedChars: deduped.length,
+        });
+      }
+      break;
+    }
+  }
+
+  if (truncated && cwd) {
+    logEvent(cwd, "warn", "Secondary model still truncated after max continuations; returning best-effort content", {
+      provider,
+      model,
+      max: maxContinuations,
+    });
+  }
+  return { content: combined, usage: totalUsage };
+}
+
+/** Remove a leading prefix of `previous` from `next` so continuation content is not duplicated.
+ *  First tries an exact match (preserves boundary spacing exactly). If no exact match
+ *  is found, falls back to a whitespace-normalized match that trims the candidate so a
+ *  model re-emitting with slightly different internal spacing still dedups — but the
+ *  slice length is reduced to the trimmed length so a trailing boundary space is kept. */
+/** @internal exported for tests */
+export function stripLeadingOverlap(previous: string, next: string): string {
+  const maxOverlap = Math.min(previous.length, next.length, 200);
+  // Exact match first — preserves spacing at the boundary precisely.
+  for (let len = maxOverlap; len > 0; len--) {
+    if (previous.endsWith(next.slice(0, len))) {
+      return next.slice(len);
+    }
+  }
+  // Whitespace-normalized fallback for internal spacing differences.
+  const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
+  const prevNorm = norm(previous);
+  for (let len = maxOverlap; len > 0; len--) {
+    const candidate = next.slice(0, len);
+    const candidateNorm = norm(candidate);
+    if (candidateNorm.length === 0) continue;
+    if (prevNorm.endsWith(candidateNorm)) {
+      // Slice at the end of the trimmed candidate in original-string coordinates so
+      // internal whitespace runs (collapsed by norm) don't throw off the offset. This
+      // keeps any trailing whitespace in the candidate in the output (boundary spacing
+      // preserved) and is immune to internal whitespace collapse.
+      const end = candidate.trimEnd().length;
+      return next.slice(end);
+    }
+  }
+  return next;
 }

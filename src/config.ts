@@ -158,6 +158,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   "testTimeoutMs",
   "verifyDoneClaims",
   "reviewReminderEdits",
+  "maxContinuations",
   "docs",
 ]);
 
@@ -348,6 +349,10 @@ function mergeConfig(base: HeyyooConfig, override: unknown): HeyyooConfig {
     modelInfo: mergeModelInfo(base.modelInfo, o.modelInfo),
     processTimeoutMs: pickOptionalNumber(o.processTimeoutMs, base.processTimeoutMs),
     testTimeoutMs: pickOptionalNumber(o.testTimeoutMs, base.testTimeoutMs),
+    maxContinuations:
+      typeof o.maxContinuations === "number" && Number.isFinite(o.maxContinuations) && o.maxContinuations >= 0
+        ? Math.floor(o.maxContinuations)
+        : base.maxContinuations,
     verifyDoneClaims: typeof o.verifyDoneClaims === "boolean" ? o.verifyDoneClaims : base.verifyDoneClaims,
     reviewReminderEdits: pickPositiveInteger(o.reviewReminderEdits ?? NaN, base.reviewReminderEdits ?? 3),
     docs: mergeDocs(base.docs, o.docs),

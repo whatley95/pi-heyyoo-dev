@@ -13,9 +13,11 @@ import {
   getProviderApiInfo,
   setSdkGetModelOverride,
   setSdkStreamSimpleOverride,
+  stripLeadingOverlap,
 } from "./secondary-model.js";
 import { setSdkOAuthResolverOverride } from "./backends/sdk-backend.js";
 import { setAgentDirForTests, getAgentDir } from "./pi-paths.js";
+import { readRecentLogs, clearLogs } from "./logger.js";
 
 const originalAgentDir = getAgentDir();
 let tempAgentDirs: string[] = [];
@@ -1249,5 +1251,557 @@ describe("sdk backend", () => {
       () => callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd }),
       /SDK backend failed: 503 Inference is temporarily unavailable; pi fallback also failed:.*pi also down/,
     );
+  });
+});
+
+describe("sdk backend truncation continuation", () => {
+  let tmpDirs: string[] = [];
+  let testAgentDir: string | null = null;
+
+  function isolateAgentDir(): void {
+    // Isolate from the user's ~/.pi/agent/settings.json so its `thinking`/`costBudget`
+    // don't leak into truncation tests.
+    testAgentDir = makeTempDir("yoo-trunc-agent-");
+    tempAgentDirs.push(testAgentDir);
+    setAgentDirForTests(() => testAgentDir!);
+  }
+
+  after(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    setSdkGetModelOverride(null);
+    setSdkStreamSimpleOverride(null);
+    setSdkOAuthResolverOverride(null);
+    setAgentDirForTests(() => originalAgentDir);
+    testAgentDir = null;
+    global.fetch = originalFetch;
+  });
+
+  it("continues a single truncated response and concatenates content", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-single-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride((_model, context) => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStream(
+          fakeSdkAssistantMessage("partial-start-that-is-long-enough", { input: 5, output: 5 }, "length"),
+        );
+      }
+      const userMsg = context.messages.find((m) => m.role === "user");
+      const userText = Array.isArray(userMsg?.content) ? ((userMsg.content[0] as { text?: string }).text ?? "") : "";
+      assert.ok(userText.includes("Continue your previous response"), "continuation instruction sent");
+      assert.ok(
+        userText.includes("partial-start-that-is-long-enough"),
+        "resume anchor included in continuation prompt",
+      );
+      // extractTextFromContent trims, so the continuation's leading space is lost;
+      // include a trailing space on the previous content instead via the assertion below.
+      return fakeSdkStream(
+        fakeSdkAssistantMessage(" and then the rest of the response", { input: 5, output: 5 }, "stop"),
+      );
+    });
+
+    const { content, usage } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    // The backend trims content, so the leading space in the continuation is dropped.
+    assert.equal(content, "partial-start-that-is-long-enoughand then the rest of the response");
+    assert.equal(callCount, 2);
+    assert.ok(usage.estimatedInputTokens >= 10);
+  });
+
+  it("stops after max continuations and returns best-effort content without throwing", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-cap-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+    clearLogs(cwd);
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      return fakeSdkStream(
+        fakeSdkAssistantMessage(`chunk-${callCount}-with-padding-text-here;`, { input: 2, output: 2 }, "length"),
+      );
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 4); // 1 initial + 3 continuations (default maxContinuations)
+    const logs = readRecentLogs(cwd);
+    assert.ok(
+      logs.some((l) => l.includes("[WARN]") && l.includes("still truncated after max continuations")),
+      "warning logged when truncation cap exceeded",
+    );
+    assert.ok(content.includes("chunk-1-with-padding-text-here;"));
+    assert.ok(content.includes("chunk-4-with-padding-text-here;"));
+  });
+
+  it("does not issue continuation when response is not truncated", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-none-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      return fakeSdkStream(fakeSdkAssistantMessage("complete response text", { input: 10, output: 5 }, "stop"));
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 1);
+    assert.equal(content, "complete response text");
+  });
+
+  it("treats empty continuation content as no-more and keeps accumulated text", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-empty-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStream(
+          fakeSdkAssistantMessage("only-part-that-is-long-enough", { input: 5, output: 5 }, "length"),
+        );
+      }
+      return fakeSdkStream(fakeSdkAssistantMessage("", { input: 2, output: 1 }, "stop"));
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 2);
+    assert.equal(content, "only-part-that-is-long-enough");
+  });
+
+  it("strips overlapping leading text from continuation content", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-overlap-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStream(
+          fakeSdkAssistantMessage("hello world this is long enough", { input: 5, output: 5 }, "length"),
+        );
+      }
+      return fakeSdkStream(
+        fakeSdkAssistantMessage("is long enough and more content here", { input: 5, output: 5 }, "stop"),
+      );
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(content, "hello world this is long enough and more content here");
+  });
+
+  it("stops continuation when cost budget is reached mid-loop", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-budget-");
+    tmpDirs.push(cwd);
+    clearLogs(cwd);
+    // Budget large enough for the first call's pre-check estimate (~$0.0123, 2048-output
+    // estimate), but small enough that the *reported* continuation cost crosses it mid-loop.
+    // Each call reports 100000 output tokens => ~$0.30/call at the opencode-go rate. After the
+    // initial call the in-flight cost (~$0.30) already exceeds $0.013, so the mid-loop check
+    // stops before a second continuation.
+    writeSettings(
+      cwd,
+      { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test", thinking: "off" },
+      { costBudgetUsd: 0.013 },
+    );
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      // Always truncated; each chunk long enough to bypass the no-progress guard.
+      return fakeSdkStream(
+        fakeSdkAssistantMessage(
+          `chunk-${callCount}-padding-text-here-for-length;`,
+          { input: 10, output: 100000 },
+          "length",
+        ),
+      );
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    // The initial call passes the pre-check (which estimates ~2048 output tokens), but its
+    // *reported* usage (100000 output tokens => ~$0.30) far exceeds the budget. The mid-loop
+    // check in runContinuationLoop catches this before a second call, so we stop at 1 call.
+    assert.ok(callCount >= 1, `at least the initial call ran (got ${callCount})`);
+    assert.ok(callCount < 4, `budget stopped continuation before the cap (got ${callCount})`);
+    const logs = readRecentLogs(cwd);
+    assert.ok(
+      logs.some((l) => l.includes("[WARN]") && l.includes("Continuation stopped; cost budget reached")),
+      "budget-reached warning logged",
+    );
+    assert.ok(content.includes("chunk-1-padding-text-here-for-length;"));
+  });
+
+  it("echoes only a resume anchor (last ~2k chars) in the continuation prompt", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-anchor-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    const longFirst = "A".repeat(3000) + "-SENTINEL-END";
+    let callCount = 0;
+    let continuationPrompt = "";
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride((_model, context) => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStream(fakeSdkAssistantMessage(longFirst, { input: 5, output: 5 }, "length"));
+      }
+      const userMsg = context.messages.find((m) => m.role === "user");
+      continuationPrompt = Array.isArray(userMsg?.content)
+        ? ((userMsg.content[0] as { text?: string }).text ?? "")
+        : "";
+      return fakeSdkStream(
+        fakeSdkAssistantMessage(" more content that is long enough here", { input: 5, output: 5 }, "stop"),
+      );
+    });
+
+    await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 2);
+    assert.ok(!continuationPrompt.includes("AAAA".repeat(750)), "full content not echoed in continuation prompt");
+    assert.ok(continuationPrompt.includes("-SENTINEL-END"), "tail anchor included");
+    const anchorMarker = continuationPrompt.indexOf("=== Last content");
+    if (anchorMarker >= 0) {
+      const anchorText = continuationPrompt.slice(anchorMarker);
+      assert.ok(anchorText.length < 2200, `anchor bounded (<2200), got ${anchorText.length}`);
+    }
+  });
+
+  it("stops early when a continuation round makes no progress (<16 chars)", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-noprogress-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+    clearLogs(cwd);
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStream(fakeSdkAssistantMessage("long-enough-initial-content", { input: 5, output: 5 }, "length"));
+      }
+      // Continuation adds only a tiny fragment after dedup.
+      return fakeSdkStream(fakeSdkAssistantMessage("long-enough-initial-contentxy", { input: 2, output: 2 }, "length"));
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 2);
+    const logs = readRecentLogs(cwd);
+    assert.ok(
+      logs.some((l) => l.includes("no progress")),
+      "no-progress stop logged",
+    );
+    assert.equal(content, "long-enough-initial-contentxy");
+  });
+
+  it("thinking-default model does not add extra retrieval calls beyond continuation", async () => {
+    // The default config sets thinking: "xhigh". Confirm truncation handling does not
+    // inject extra thinking-disabled retries — continuation is just initial + rounds.
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-thinking-noop-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStream(
+          fakeSdkAssistantMessage("long-enough-initial-content-here", { input: 5, output: 5 }, "length"),
+        );
+      }
+      return fakeSdkStream(
+        fakeSdkAssistantMessage(" and the completed tail content here", { input: 5, output: 5 }, "stop"),
+      );
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 2, "exactly initial + one continuation, no thinking-retry");
+    assert.ok(content.includes("long-enough-initial-content-here"));
+    assert.ok(content.includes("completed tail content here"));
+  });
+
+  it("maxContinuations config caps the number of continuation rounds", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-maxcfg-");
+    tmpDirs.push(cwd);
+    writeSettings(
+      cwd,
+      { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" },
+      { maxContinuations: 1 },
+    );
+    clearLogs(cwd);
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      return fakeSdkStream(
+        fakeSdkAssistantMessage(`chunk-${callCount}-padding-here;`, { input: 2, output: 2 }, "length"),
+      );
+    });
+
+    await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(callCount, 2); // 1 initial + 1 continuation (maxContinuations=1)
+  });
+
+  it("forwards onStreamProgress into each continuation round", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-progress-cb-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    let progressCalls = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fakeSdkStreamingStream(
+          ["first-", "call-", "long-enough"],
+          fakeSdkAssistantMessage("first-call-long-enough", { input: 5, output: 5 }, "length"),
+        );
+      }
+      return fakeSdkStreamingStream(
+        ["second-", "call-", "completing"],
+        fakeSdkAssistantMessage("second-call-completing-here", { input: 5, output: 5 }, "stop"),
+      );
+    });
+
+    await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", {
+      cwd,
+      onStreamProgress: () => {
+        progressCalls++;
+      },
+    });
+    assert.equal(callCount, 2);
+    assert.ok(progressCalls >= 2, `stream progress fired across rounds (got ${progressCalls})`);
+  });
+
+  it("stripLeadingOverlap is whitespace-tolerant", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-ws-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "opencode-go", id: "qwen3.7-max", apiKey: "opencode-test" });
+
+    let callCount = 0;
+    setSdkGetModelOverride((provider, modelId) => fakeSdkModel(provider, modelId));
+    setSdkStreamSimpleOverride(() => {
+      callCount++;
+      if (callCount === 1) {
+        // Previous content ends with "foo" (with extra whitespace before it).
+        return fakeSdkStream(fakeSdkAssistantMessage("hello   world\n\nfoo", { input: 5, output: 5 }, "length"));
+      }
+      // Continuation re-emits the tail "foo" but with different surrounding spacing,
+      // then adds new content. The dedup should strip the repeated "foo" and keep the space.
+      return fakeSdkStream(fakeSdkAssistantMessage("foo and more here padding", { input: 5, output: 5 }, "stop"));
+    });
+
+    const { content } = await callSecondaryModel("opencode-go", "qwen3.7-max", "system", "user", { cwd });
+    assert.equal(content, "hello   world\n\nfoo and more here padding");
+  });
+
+  it("stripLeadingOverlap handles internal whitespace in overlap without duplicating chars", () => {
+    // Exact match: overlap at word boundary.
+    assert.equal(stripLeadingOverlap("hello world", "world and more"), " and more");
+    // Fallback: internal double-space normalized away in overlap region.
+    // prev ends with "ab cd", next starts with "ab  cd suffix" (double space in next).
+    assert.equal(stripLeadingOverlap("prefix ab cd", "ab  cd suffix"), " suffix");
+    // Internal newlines collapsed to space in the overlap.
+    assert.equal(stripLeadingOverlap("foo line1 line2", "line1\nline2 tail"), " tail");
+    // Trailing whitespace in candidate preserved after overlap strip.
+    assert.equal(stripLeadingOverlap("end", "end  "), "  ");
+    // No overlap: returns full next.
+    assert.equal(stripLeadingOverlap("abc", "xyz"), "xyz");
+  });
+
+  it("retry-with-reasoning-off path preserves truncated signal (http openai)", async () => {
+    isolateAgentDir();
+    const cwd = makeTempDir("yoo-trunc-rro-");
+    tmpDirs.push(cwd);
+    // o3-mini is in supportsReasoningEffort's known set, so reasoning_effort is sent on the first call.
+    writeSettings(cwd, { provider: "openai", id: "o3-mini", backend: "http", apiKey: "sk-test" });
+
+    const savedFetch = global.fetch;
+    let callCount = 0;
+    global.fetch = (async (_url, init) => {
+      callCount++;
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+      const userContent = Array.isArray(body.messages) ? body.messages[1]?.content : "";
+      const isInitial = typeof userContent === "string" && !userContent.includes("Continue your previous response");
+      if (isInitial && body.reasoning_effort) {
+        // First call with reasoning effort: reasoning_content only, finish_reason length.
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { reasoning_content: "thinking only", content: "" }, finish_reason: "length" }],
+            usage: { prompt_tokens: 5, completion_tokens: 5 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (isInitial) {
+        // Retry with reasoning disabled: returns truncated text, finish_reason length.
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "visible-partial-text-long-enough" }, finish_reason: "length" }],
+            usage: { prompt_tokens: 5, completion_tokens: 5 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      // Continuation: completes the response.
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: " and then the completion text" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 5, completion_tokens: 5 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const { content } = await callSecondaryModel("openai", "o3-mini", "system", "user", {
+      cwd,
+      thinking: "high",
+    });
+    assert.equal(callCount, 3, "initial + reasoning-off retry + continuation");
+    assert.equal(content, "visible-partial-text-long-enough and then the completion text");
+    global.fetch = savedFetch;
+  });
+});
+
+describe("http backend anthropic truncation continuation", () => {
+  let tmpDirs: string[] = [];
+  const originalFetch = global.fetch;
+
+  after(() => {
+    global.fetch = originalFetch;
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    setAgentDirForTests(() => originalAgentDir);
+  });
+
+  it("continues anthropic non-streaming fallback when stop_reason is max_tokens", async () => {
+    const agentDir = makeTempDir("yoo-ca-anthropic-");
+    tempAgentDirs.push(agentDir);
+    setAgentDirForTests(() => agentDir);
+    const cwd = makeTempDir("yoo-trunc-anthropic-fallback-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "anthropic", id: "claude-3-5-sonnet", backend: "http", apiKey: "sk-test" });
+
+    let callCount = 0;
+    global.fetch = (async (_url, init) => {
+      callCount++;
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+      const userContent = Array.isArray(body.messages) ? body.messages[0]?.content : "";
+      const isFirst = typeof userContent === "string" && !userContent.includes("Continue your previous response");
+      if (isFirst) {
+        return new Response(
+          JSON.stringify({ content: [{ type: "text", text: "alpha long enough here" }], stop_reason: "max_tokens" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ content: [{ type: "text", text: "-omega long enough here" }], stop_reason: "end_turn" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const { content } = await callSecondaryModel("anthropic", "claude-3-5-sonnet", "system", "user", { cwd });
+    assert.equal(callCount, 2);
+    assert.equal(content, "alpha long enough here-omega long enough here");
+  });
+
+  it("continues anthropic streaming when message_delta stop_reason is max_tokens", async () => {
+    const agentDir = makeTempDir("yoo-ca-anthropic-sse-");
+    tempAgentDirs.push(agentDir);
+    setAgentDirForTests(() => agentDir);
+    const cwd = makeTempDir("yoo-trunc-anthropic-sse-");
+    tmpDirs.push(cwd);
+    writeSettings(cwd, { provider: "anthropic", id: "claude-3-5-sonnet", backend: "http", apiKey: "sk-test" });
+
+    let callCount = 0;
+    global.fetch = (async (_url, init) => {
+      callCount++;
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+      const userContent = Array.isArray(body.messages) ? body.messages[0]?.content : "";
+      const isFirst = typeof userContent === "string" && !userContent.includes("Continue your previous response");
+      const sse = isFirst
+        ? [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"streamed-part-long-enough"}}',
+            "",
+            "event: message_delta",
+            'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}',
+            "",
+            "event: message_stop",
+            'data: {"type":"message_stop"}',
+            "",
+          ].join("\n")
+        : [
+            "event: message_start",
+            'data: {"type":"message_start","message":{"usage":{"input_tokens":3}}}',
+            "",
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"-done-long-enough-here"}}',
+            "",
+            "event: message_delta",
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}',
+            "",
+            "event: message_stop",
+            'data: {"type":"message_stop"}',
+            "",
+          ].join("\n");
+      return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const { content } = await callSecondaryModel("anthropic", "claude-3-5-sonnet", "system", "user", {
+      cwd,
+      thinking: "off",
+    });
+    assert.equal(callCount, 2);
+    assert.equal(content, "streamed-part-long-enough-done-long-enough-here");
   });
 });

@@ -1,6 +1,15 @@
 import type { UsageCost } from "../types.js";
 import type { AssistantMessageLike, ContentPart, PiProcessResult } from "../types/secondary-model.js";
 
+/** Normalize backend-specific stop reasons into a single "was the output truncated?"
+ *  signal. Covers the Anthropic/OpenAI SDK ("length"), Anthropic HTTP
+ *  ("max_tokens"), and OpenAI HTTP ("length") reasons. */
+export function isLengthStop(reason: unknown): boolean {
+  if (typeof reason !== "string") return false;
+  const r = reason.toLowerCase();
+  return r === "length" || r === "max_tokens" || r === "maxtokens";
+}
+
 export function estimateCost(provider: string, model: string, inputTokens: number, outputTokens: number): number {
   // Approximate cost per 1M tokens in USD. These are rough averages.
   const key = `${provider}:${model}`.toLowerCase();
