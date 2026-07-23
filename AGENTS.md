@@ -37,7 +37,7 @@ This file is written for AI coding agents. It assumes no prior knowledge of the 
 | `/wai-search`          | Web search via the configured provider (DuckDuckGo/Brave).                                           |
 | `/wai-search-config`   | Configure the web search provider and save the Brave API key to `auth.json`.                         |
 | `/wai-next`            | Recommend the next step based on the active plan.                                                    |
-| `/wai-done`            | Mark the current plan step complete and recommend the next step.                                     |
+| `/wai-done`            | Mark the current plan step complete and recommend the next step. `/wai-done N` sets progress to step N (lower N regresses, `0` resets); `all` completes everything. |
 | `/wai-logs`            | Show recent wai error/event log entries for this project.                                            |
 | `/wai-test`            | Test connectivity to the configured secondary model(s); an optional task name scopes the check.     |
 | `/wai-backend`         | Switch the secondary model backend: `sdk` (default), `pi`, or `http`.                                |

@@ -14,7 +14,14 @@ import {
 import { getPastIssuesForFiles } from "../review-memory.js";
 import { runPreReviewCommands, formatPreReviewOutput } from "../pre-review.js";
 import { calculateReviewBudget, estimateTokens } from "../token-budget.js";
-import { getState, buildReviewHistory, getProgress, markStepsDoneByIds, getEditTracker } from "../session-state.js";
+import {
+  getState,
+  buildReviewHistory,
+  getProgress,
+  markStepsDoneByIds,
+  setPlanProgress,
+  getEditTracker,
+} from "../session-state.js";
 import { logEvent } from "../logger.js";
 import {
   STAGES,
@@ -261,6 +268,29 @@ export async function executeWaiJudge(
           verdict: judge.verdict,
         });
       }
+    }
+  }
+
+  // Explicit regression: the judge names steps the tracker marks complete
+  // that the code does not actually satisfy. Steps are sequential, so roll
+  // back to just before the earliest incomplete step. This only fires when
+  // the model explicitly reports incomplete steps — never inferred from a
+  // short completedStepIds list, which may just reflect partial examination.
+  if (judge.incompleteStepIds && judge.incompleteStepIds.length > 0) {
+    const state = getState(cwd);
+    const earliest = Math.min(...judge.incompleteStepIds);
+    if (state.totalSteps > 0 && earliest <= state.completedSteps) {
+      const previousCompleted = state.completedSteps;
+      setPlanProgress(cwd, earliest - 1);
+      const progress = getProgress(cwd);
+      judge.planProgress = `${progress.completed}/${progress.total} steps done`;
+      judge.nextStep = progress.nextStep;
+      logEvent(cwd, "info", "Judge regressed plan tracker", {
+        previousCompleted,
+        newCompleted: progress.completed,
+        incompleteStepIds: judge.incompleteStepIds,
+        verdict: judge.verdict,
+      });
     }
   }
 

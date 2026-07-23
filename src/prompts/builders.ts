@@ -643,6 +643,7 @@ Rules:
 - "consensus" is true only when verdict is "pass" AND issues is empty
 - Set "planStale": true if the original plan contradicts the final code and the code is internally consistent. Judge the code on its own merits and note that the plan should be updated.
 - "completedStepIds" (optional): a list of 1-based plan step IDs that the current diff fully satisfies. Only include steps you are confident about. They must be contiguous from step 1 (e.g., [1,2,3] is valid; [1,3] is not). Do not include steps beyond the current diff or future work.
+- "incompleteStepIds" (optional): 1-based plan step IDs that the tracker marks complete but the shown code does NOT actually satisfy. Only list steps you are confident are not done, with cited evidence. Because steps are sequential, the tracker is rolled back to just before the earliest incomplete step. Omit when the tracker looks correct.
 - "planUpdateSuggested" (optional): set to true if the original plan contradicts the final code and the code is internally consistent. Explain briefly in "planUpdateReason".
 - Provide a real summary that captures the overall quality, not filler
 - Judge only against the original plan and acceptance criteria; do not introduce new requirements that were not part of the plan

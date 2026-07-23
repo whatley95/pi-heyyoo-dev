@@ -3,7 +3,7 @@ import { getDiff } from "../diff-grabber.js";
 import {
   getProgress,
   markStepComplete,
-  markStepsComplete,
+  setPlanProgress,
   getState,
   getEditTracker,
   resetEditsSinceDone,
@@ -26,12 +26,12 @@ function parseDoneTarget(value: string | number | undefined): { targetStep?: num
     return { targetStep: Number.MAX_SAFE_INTEGER, label: "all" };
   }
   const num = Number(trimmed);
-  if (!Number.isNaN(num) && num > 0 && Number.isInteger(num)) {
+  if (!Number.isNaN(num) && num >= 0 && Number.isInteger(num)) {
     return { targetStep: num, label: trimmed };
   }
   return {
     label: value,
-    error: `Invalid done target: "${value}". Use a step number, "all", or omit it to mark the current step.`,
+    error: `Invalid done target: "${value}". Use a step number (0 resets progress), "all", or omit it to mark the current step.`,
   };
 }
 
@@ -45,16 +45,9 @@ export async function executeWaiDone(cwd: string, value?: string | number, signa
       message: "No active wai plan. Start one with /wai plan <task>.",
     };
   }
-  if (before.completed >= before.total) {
-    return {
-      completedStep: before.completed,
-      totalSteps: before.total,
-      allDone: true,
-      message: "All plan steps are already complete. Run /wai judge for a final review.",
-    };
-  }
 
-  const config = loadYoowaiConfig(cwd);
+  // Parse the target before the all-complete check: an explicit target BELOW
+  // the current progress is a regression request and must not be blocked.
   const { targetStep, label, error } = parseDoneTarget(value);
   if (error) {
     return {
@@ -65,6 +58,17 @@ export async function executeWaiDone(cwd: string, value?: string | number, signa
       message: error,
     };
   }
+
+  if (before.completed >= before.total && (targetStep === undefined || targetStep >= before.completed)) {
+    return {
+      completedStep: before.completed,
+      totalSteps: before.total,
+      allDone: true,
+      message: "All plan steps are already complete. Run /wai judge for a final review.",
+    };
+  }
+
+  const config = loadYoowaiConfig(cwd);
   const state = getState(cwd);
   const currentStepIndex = state.completedSteps;
   const stepDescription =
@@ -123,21 +127,25 @@ export async function executeWaiDone(cwd: string, value?: string | number, signa
   }
 
   if (targetStep !== undefined) {
-    markStepsComplete(cwd, targetStep, false);
+    // Explicit targets are corrections and work in both directions: a target
+    // below the current progress regresses the tracker.
+    setPlanProgress(cwd, targetStep);
   } else {
     markStepComplete(cwd);
   }
   resetEditsSinceDone(cwd);
 
   const after = getProgress(cwd);
+  const regressed = targetStep !== undefined && after.completed < before.completed;
   return {
     completedStep: after.completed,
     totalSteps: after.total,
     nextStep: after.nextStep ?? undefined,
     allDone: after.completed >= after.total,
     verified,
-    message:
-      targetStep !== undefined
+    message: regressed
+      ? `Plan tracker regressed to step ${after.completed} (was ${before.completed}/${after.total}); later steps are now marked incomplete.`
+      : targetStep !== undefined
         ? `Marked steps up to ${label} complete (${after.completed}/${after.total}).`
         : `Step ${before.completed + 1} marked complete (${after.completed}/${after.total}).`,
   };

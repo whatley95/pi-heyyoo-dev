@@ -139,6 +139,8 @@ export interface RecommendResult {
 export interface JudgeResult extends ReviewResult {
   summary: string;
   completedStepIds?: number[];
+  /** Steps the tracker marks complete that the code does NOT actually satisfy. */
+  incompleteStepIds?: number[];
   planUpdateSuggested?: boolean;
   planUpdateReason?: string;
   unreviewedEdits?: boolean;

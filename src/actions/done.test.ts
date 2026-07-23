@@ -65,3 +65,24 @@ test("executeWaiDone marks up to an explicit target without claim verification",
   assert.equal(result.verified, undefined);
   assert.ok(result.message.includes("Marked steps up to 2"));
 });
+
+test("executeWaiDone regresses the tracker when the explicit target is lower", async () => {
+  const cwd = tempCwd();
+  writeConfig(cwd, true);
+  setPlan(cwd, plan);
+  await executeWaiDone(cwd, 3);
+  const result = await executeWaiDone(cwd, 1);
+  assert.equal(result.completedStep, 1);
+  assert.equal(result.allDone, false);
+  assert.ok(result.message.includes("regressed to step 1"));
+});
+
+test("executeWaiDone resets the tracker with an explicit zero target", async () => {
+  const cwd = tempCwd();
+  writeConfig(cwd, true);
+  setPlan(cwd, plan);
+  await executeWaiDone(cwd, 2);
+  const result = await executeWaiDone(cwd, 0);
+  assert.equal(result.completedStep, 0);
+  assert.equal(result.allDone, false);
+});

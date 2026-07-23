@@ -274,7 +274,7 @@ export default async function (pi: ExtensionAPI) {
       "Use wai with security:true when the change involves auth, input handling, secrets, dependencies, or any security-sensitive area. Pass a description of the function or API to audit and scope it with files:[...] if needed.",
       "Use wai with judge:true after completing all work for a final holistic review against the original plan.",
       "Use wai with done:true to mark the current plan step complete. Use it after finishing a step so the tracker stays in sync.",
-      "If the plan tracker drifts from reality (e.g. progress % looks wrong for the work actually completed), correct it with wai done:<step number> or done:'all'. wai.judge also re-syncs the tracker from its completedStepIds whenever it runs.",
+      "If the plan tracker drifts from reality (e.g. progress % looks wrong for the work actually completed), correct it with wai done:<step number> — a lower number regresses the tracker, 0 resets it — or done:'all'. wai.judge also re-syncs the tracker from its completedStepIds/incompleteStepIds whenever it runs.",
       "Use wai with planUpdate:'<new task description>' when the original plan no longer matches the implementation. The plan is regenerated and already-completed progress is preserved.",
       "Enable autoJudge in settings.json to automatically run judge when the last plan step is completed (passes review or is marked done via /wai-done).",
 
@@ -339,7 +339,7 @@ export default async function (pi: ExtensionAPI) {
       done: Type.Optional(
         Type.Union([Type.Boolean(), Type.String(), Type.Number()], {
           description:
-            "Mark wai plan step(s) complete. Pass true/empty string for the current step, a positive number to mark up to that step, 'all' for all steps, or a description to record what was completed.",
+            "Mark wai plan step(s) complete. Pass true/empty string for the current step, a positive number to mark up to that step, a lower number to regress the tracker to that step (0 resets progress), 'all' for all steps, or a description to record what was completed.",
         }),
       ),
       planUpdate: Type.Optional(

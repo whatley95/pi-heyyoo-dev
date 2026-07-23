@@ -13,6 +13,7 @@ import {
   getLastReviewedCommit,
   setLastReviewedCommit,
   markStepsDoneByIds,
+  setPlanProgress,
 } from "./session-state.js";
 import type { PlanResult } from "./types.js";
 
@@ -112,4 +113,32 @@ test("markStepsDoneByIds ignores ids beyond total steps", () => {
   setPlan(cwd, plan);
   assert.equal(markStepsDoneByIds(cwd, [1, 2, 3, 4, 5], true), 3);
   assert.equal(getProgress(cwd).completed, 3);
+});
+
+test("setPlanProgress advances and regresses, clearing reviewed flags and re-arming judge", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  markStepsDoneByIds(cwd, [1, 2, 3], true);
+  markJudgeCompleted(cwd);
+  assert.equal(getProgress(cwd).completed, 3);
+
+  // Regress: step 3 was not actually done.
+  setPlanProgress(cwd, 2);
+  const state = getState(cwd);
+  assert.equal(state.completedSteps, 2);
+  assert.equal(state.reviewedSteps[2], false);
+  assert.equal(state.reviewedSteps[0], true);
+  // A regressed plan may be judged again.
+  assert.equal(state.judgeCompleted, false);
+
+  // Advance again: newly completed steps are marked not reviewed.
+  setPlanProgress(cwd, 3);
+  assert.equal(getProgress(cwd).completed, 3);
+  assert.equal(getState(cwd).reviewedSteps[2], false);
+
+  // Clamps to [0, totalSteps].
+  setPlanProgress(cwd, 99);
+  assert.equal(getProgress(cwd).completed, 3);
+  setPlanProgress(cwd, -5);
+  assert.equal(getProgress(cwd).completed, 0);
 });

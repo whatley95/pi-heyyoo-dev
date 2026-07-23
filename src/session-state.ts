@@ -59,6 +59,32 @@ export function markStepsComplete(cwd: string, count: number, reviewed = false):
   saveState(cwd, state);
 }
 
+/** Set the tracker to an exact completed-step count in EITHER direction.
+ *  Used for explicit tracker corrections (done:<n>, judge regression).
+ *  Advancing marks the newly completed steps as not reviewed; regressing
+ *  clears the reviewed flags of the rolled-back steps and re-arms judge.
+ *  Clamped to [0, totalSteps]. */
+export function setPlanProgress(cwd: string, completed: number): void {
+  const state = getState(cwd);
+  if (state.totalSteps === 0) return;
+  const target = Math.max(0, Math.min(Math.trunc(completed), state.totalSteps));
+  if (target === state.completedSteps) return;
+  if (target > state.completedSteps) {
+    while (state.completedSteps < target) {
+      state.completedSteps++;
+      state.reviewedSteps[state.completedSteps - 1] = false;
+    }
+  } else {
+    for (let i = target; i < state.completedSteps; i++) {
+      state.reviewedSteps[i] = false;
+    }
+    state.completedSteps = target;
+    // A plan that is no longer fully complete may be judged again.
+    state.judgeCompleted = false;
+  }
+  saveState(cwd, state);
+}
+
 export function markStepsDoneByIds(cwd: string, ids: number[], reviewed = true): number {
   const state = getState(cwd);
   if (state.totalSteps === 0 || ids.length === 0) return state.completedSteps;

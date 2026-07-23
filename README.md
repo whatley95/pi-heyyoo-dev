@@ -238,7 +238,7 @@ The `wai` tool is called by the main agent during development:
 
 Plan steps can include `priority` (`high`, `medium`, `low`) and `dependsOn` (1-based list of earlier steps). Plain-string steps still work for backward compatibility.
 
-**Plan tracker.** wai tracks file edits and sends a workflow reminder after 3+ edits without a `wai.review` or `wai.done` call, so the plan tracker stays in sync. Review automatically advances the plan by the number of steps the model reports as completed (`completedSteps`).
+**Plan tracker.** wai tracks file edits and sends a workflow reminder after 3+ edits without a `wai.review` or `wai.done` call, so the plan tracker stays in sync. Review automatically advances the plan by the number of steps the model reports as completed (`completedSteps`). Judge re-syncs the tracker in both directions: it advances from `completedStepIds` and regresses from `incompleteStepIds` (steps the tracker marks complete that the code does not actually satisfy). You can also correct the tracker manually: `wai({ done: N })` or `/wai-done N` sets progress to step N — a number below the current progress regresses it, and `0` resets it.
 
 ### `wai_index` tool
 
@@ -310,7 +310,7 @@ Recorded facts appear in `wai_index({ topic: "learned" })`.
 | `/wai-scan-deep`                              | Alias for `/wai scan --deep`                                              |
 | `/wai-next`                                   | Recommend the next step based on the active plan                          |
 | `/wai-done [description]`                     | Mark the current plan step complete and recommend the next step           |
-| `/wai-done 3`                                 | Mark steps 1–3 complete                                                   |
+| `/wai-done 3`                                 | Mark steps 1–3 complete (lower number regresses the tracker, `0` resets)  |
 | `/wai-done all`                               | Mark all steps complete                                                   |
 | `/wai-plan-update <new task description>`     | Regenerate the active plan; already-completed progress is preserved       |
 

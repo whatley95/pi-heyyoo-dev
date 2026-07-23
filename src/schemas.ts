@@ -86,6 +86,7 @@ export const JudgeResultSchema = Type.Object(
     droppedFiles: Type.Optional(Type.Array(Type.String())),
     contextLimited: Type.Optional(Type.Boolean()),
     completedStepIds: Type.Optional(Type.Array(Type.Number())),
+    incompleteStepIds: Type.Optional(Type.Array(Type.Number())),
     planUpdateSuggested: Type.Optional(Type.Boolean()),
     planUpdateReason: Type.Optional(Type.String()),
     unreviewedEdits: Type.Optional(Type.Boolean()),

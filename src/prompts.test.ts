@@ -597,6 +597,19 @@ describe("validateJudgeResult", () => {
     assert.deepEqual(result!.completedStepIds, [1, 2, 3]);
   });
 
+  it("normalizes incompleteStepIds the same way as completedStepIds", () => {
+    const result = validateJudgeResult({
+      verdict: "needs-work",
+      issues: [],
+      suggestions: [],
+      consensus: false,
+      summary: "step 3 is not done",
+      incompleteStepIds: [4, 3, 3, -1, "x"],
+    });
+    assert.ok(result);
+    assert.deepEqual(result!.incompleteStepIds, [3, 4]);
+  });
+
   it("removes completedStepIds when no valid ids remain", () => {
     const result = validateJudgeResult({
       verdict: "pass",

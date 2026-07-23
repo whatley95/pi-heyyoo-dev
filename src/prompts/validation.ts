@@ -317,18 +317,27 @@ export function validateRecommendResult(data: unknown): RecommendResult | null {
   return castOrNull<RecommendResult>(RecommendResultSchema, data);
 }
 
+/** Dedupe, sort, and drop invalid step IDs; remove the field when nothing valid remains. */
+function normalizeStepIds(result: { completedStepIds?: number[]; incompleteStepIds?: number[] }): void {
+  for (const key of ["completedStepIds", "incompleteStepIds"] as const) {
+    const ids = result[key];
+    if (!ids) continue;
+    const clean = Array.from(
+      new Set(ids.filter((id) => typeof id === "number" && Number.isFinite(id) && id >= 1)),
+    ).sort((a, b) => a - b);
+    if (clean.length === 0) {
+      delete result[key];
+    } else {
+      result[key] = clean;
+    }
+  }
+}
+
 export function validateJudgeResult(data: unknown): JudgeResult | null {
   const result = castOrNull<JudgeResult>(JudgeResultSchema, data);
   if (!result) return null;
   normalizeIssueFields(result.issues);
-  if (result.completedStepIds) {
-    result.completedStepIds = Array.from(
-      new Set(result.completedStepIds.filter((id) => typeof id === "number" && Number.isFinite(id) && id >= 1)),
-    ).sort((a, b) => a - b);
-    if (result.completedStepIds.length === 0) {
-      delete result.completedStepIds;
-    }
-  }
+  normalizeStepIds(result);
   return result;
 }
 

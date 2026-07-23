@@ -23,6 +23,7 @@ import { type LoopDetectionState } from "../loop-detector.js";
 import { logEvent } from "../logger.js";
 import type { WaiToolResult } from "../types.js";
 import { updateWaiStatus } from "./status.js";
+import { publishWaiResult } from "./publish.js";
 import { flushSessionState } from "../session-state.js";
 import { unregisterWaiProvider } from "./provider.js";
 
@@ -81,6 +82,9 @@ export async function triggerAutoJudge(
       ctx.sessionManager,
     );
     markJudgeCompleted(ctx.cwd);
+    // Publish so the auto-judge verdict is audited and the footer/widget
+    // reflect any tracker sync immediately, not after the next wai call.
+    publishWaiResult(ctx, judgeResult);
     const text = formatResultText(judgeResult);
     ctx.ui.notify(text.slice(0, 500), judgeResult.error ? "error" : "info");
   } catch (err) {
