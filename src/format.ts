@@ -161,6 +161,9 @@ export function formatResultText(result: WaiToolResult): string {
       );
     } else if (result.review.verdict === "needs-work" || result.review.verdict === "blocked") {
       lines.push("**Action:** Fix the issues above and call `wai.review` again.");
+      lines.push(
+        "**Disagree?** If a finding is wrong, do not change correct code to satisfy it — refute it with concrete evidence (file/line, test output, docs) in the next `wai.review` call, or ask the user when unsure.",
+      );
       if (result.review.fixPlan && result.review.fixPlan.length > 0) {
         lines.push("");
         lines.push("### Suggested fix plan");

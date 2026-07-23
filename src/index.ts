@@ -267,7 +267,7 @@ export default async function (pi: ExtensionAPI) {
       "wai: always get a second opinion from the secondary model before acting on code or making architectural decisions",
     promptGuidelines: [
       "Always use wai with plan:true before starting any non-trivial implementation. The secondary model creates a structured todo list with acceptance criteria; do not write code without a plan.",
-      "Always use wai with review:true after every code change. Treat review feedback as blocking; fix issues and re-run review until it returns 'pass'.",
+      "Always use wai with review:true after every code change. Treat review feedback as blocking; fix issues and re-run review until it returns 'pass'. You may disagree with a finding: if the code is actually correct, refute the finding with concrete evidence (file/line, test output, docs) instead of changing correct code — re-run review explaining why, use verify:true for high-stakes disagreements, and ask the user when unsure.",
       "Use wai with review:true and files:[...] to limit the review to specific files, or exclude:[...] to skip files like generated output.",
       "Use wai with scan:true immediately when opening a project for the first time. Stored conventions improve all future reviews and plans. Add scanDeep:true on that first scan to also sample source files and build the project symbol index.",
       "Use wai with suggest:true whenever you are uncertain about the best approach for a specific technical question. If you are stuck, looping, or about to ask the user for help, call wai.suggest first.",
