@@ -8,6 +8,7 @@ import { clearPromptCache } from "../prompts.js";
 import { parseReviewCommandArgs, parseTestCommandArgs, parseSecurityCommandArgs } from "./arg-parsers.js";
 import { createProgressReporter, clearWaiStatus } from "../progress.js";
 import { callSecondaryModel, clearPiSessionId } from "../secondary-model.js";
+import { getPiAiCompat } from "../backends/sdk-backend.js";
 import { formatTokenCount, secondaryModelLabel } from "../actions/shared.js";
 import { executeWaiPlan } from "../actions/plan.js";
 import { executeWaiPlanUpdate } from "../actions/plan-update.js";
@@ -49,13 +50,13 @@ import type { LoopDetectionState } from "../loop-detector.js";
 
 const DEPRECATION_PREFIX = "Deprecated alias; prefer ";
 
+export interface ModelThinkingDetails {
+  reasoning?: boolean;
+  thinkingLevelMap?: Partial<Record<string, string | null>>;
+}
+
 export function computeThinkingLevels(
-  modelDetails:
-    | {
-        reasoning?: boolean;
-        thinkingLevelMap?: Partial<Record<string, string | null>>;
-      }
-    | undefined,
+  modelDetails: ModelThinkingDetails | undefined,
   canonicalLevels: readonly string[],
 ): string[] {
   if (modelDetails?.reasoning === false) {
@@ -75,6 +76,34 @@ export function computeThinkingLevels(
   }
   supported.add("off");
   return canonicalLevels.filter((l) => supported.has(l));
+}
+
+/** Resolve a model's advertised thinking levels. The Pi model registry does not
+ *  reliably expose `thinkingLevelMap` (its `getModel` may be absent or return a
+ *  model without the map), which caused `/wai-model` to fall back to the full
+ *  canonical list. The pi-ai SDK catalog — the same source the main agent's
+ *  model picker reads — is authoritative, so prefer it and fall back to the
+ *  registry only when the catalog has nothing. */
+export async function resolveModelThinkingDetails(
+  provider: string,
+  modelId: string,
+  registryModel: ModelThinkingDetails | undefined,
+): Promise<ModelThinkingDetails | undefined> {
+  let sdkModel: ModelThinkingDetails | undefined;
+  try {
+    const piAi = await getPiAiCompat();
+    const m = piAi.getModel(provider, modelId);
+    if (m) {
+      sdkModel = { reasoning: m.reasoning, thinkingLevelMap: m.thinkingLevelMap };
+    }
+  } catch {
+    // pi-ai catalog unavailable (e.g. package not resolvable); fall through.
+  }
+  const sdkHasMap = !!sdkModel?.thinkingLevelMap && Object.keys(sdkModel.thinkingLevelMap).length > 0;
+  const registryHasMap = !!registryModel?.thinkingLevelMap && Object.keys(registryModel.thinkingLevelMap).length > 0;
+  if (sdkHasMap) return sdkModel;
+  if (registryHasMap) return registryModel;
+  return sdkModel ?? registryModel;
 }
 
 async function showWaiStatus(ctx: ExtensionContext): Promise<void> {
@@ -618,7 +647,8 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
       // 4. Pick thinking level.
       // Prefer the model's advertised supported levels from the Pi SDK catalog.
       const canonicalThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-      const modelDetails = typeof registry.getModel === "function" ? registry.getModel(provider, modelId) : undefined;
+      const registryModel = typeof registry.getModel === "function" ? registry.getModel(provider, modelId) : undefined;
+      const modelDetails = await resolveModelThinkingDetails(provider, modelId, registryModel);
       const thinkingLevels = computeThinkingLevels(modelDetails, canonicalThinkingLevels);
       if (thinkingLevels.length === 0) {
         ctx.ui.notify(`Model ${provider}:${modelId} does not advertise any thinking levels.`, "warning");
