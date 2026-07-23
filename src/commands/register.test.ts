@@ -299,8 +299,8 @@ describe("model picker helpers", () => {
     assert.strictEqual(result, "gpt-4o");
   });
 
-  it("pickModelFromProvider groups hierarchical models after search is cancelled", async () => {
-    const ctx = fakeContext(["openai (11 models)", "openai/model-3"], [undefined]);
+  it("pickModelFromProvider browses families first for large multi-group catalogs", async () => {
+    const ctx = fakeContext(["openai (11 models)", "openai/model-3"]);
     const models: ModelRef[] = [
       ...Array.from({ length: 11 }, (_, i) => ({ id: `openai/model-${i}`, provider: "openrouter" })),
       ...Array.from({ length: 11 }, (_, i) => ({ id: `anthropic/model-${i}`, provider: "openrouter" })),
@@ -309,12 +309,35 @@ describe("model picker helpers", () => {
     assert.strictEqual(result, "openai/model-3");
   });
 
-  it("pickModelFromProvider uses search-first for large catalogs", async () => {
-    const ctx = fakeContext(["openai/model-3"], ["model-3"]);
+  it("pickModelFromProvider offers a search escape hatch from family browse", async () => {
+    const ctx = fakeContext(["Search all openrouter models…", "openai/model-3"], ["model-3"]);
     const models: ModelRef[] = [
       ...Array.from({ length: 11 }, (_, i) => ({ id: `openai/model-${i}`, provider: "openrouter" })),
       ...Array.from({ length: 11 }, (_, i) => ({ id: `anthropic/model-${i}`, provider: "openrouter" })),
     ];
+    const result = await pickModelFromProvider(ctx, "openrouter", models, "");
+    assert.strictEqual(result, "openai/model-3");
+  });
+
+  it("pickModelFromProvider returns to family browse when search matches nothing", async () => {
+    const ctx = fakeContext(
+      ["Search all openrouter models…", "openai (11 models)", "openai/model-3"],
+      ["zzz"],
+    );
+    const models: ModelRef[] = [
+      ...Array.from({ length: 11 }, (_, i) => ({ id: `openai/model-${i}`, provider: "openrouter" })),
+      ...Array.from({ length: 11 }, (_, i) => ({ id: `anthropic/model-${i}`, provider: "openrouter" })),
+    ];
+    const result = await pickModelFromProvider(ctx, "openrouter", models, "");
+    assert.strictEqual(result, "openai/model-3");
+  });
+
+  it("pickModelFromProvider still search-first for a large single-family catalog", async () => {
+    const ctx = fakeContext(["openai/model-3"], ["model-3"]);
+    const models: ModelRef[] = Array.from({ length: 25 }, (_, i) => ({
+      id: `openai/model-${i}`,
+      provider: "openrouter",
+    }));
     const result = await pickModelFromProvider(ctx, "openrouter", models, "");
     assert.strictEqual(result, "openai/model-3");
   });

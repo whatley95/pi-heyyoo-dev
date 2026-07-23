@@ -261,30 +261,41 @@ export async function pickModelFromProvider(
     }
   }
 
+  // Small catalogs: a single flat list is the best UX.
   if (candidates.length <= MODEL_PICKER_SOFT_CAP) {
     const items = candidates.map((m) => formatModelItem(m, currentId));
     const picked = await ctx.ui.select(`Pick model for ${provider}:`, items);
     return picked ? parseModelIdFromItem(picked) : undefined;
   }
 
-  // For large catalogs, open the real-time searchable picker first.
-  // If the user cancels or the query matches nothing, fall back to grouped browsing.
-  const searchResult = await searchOrSelectModel(ctx, provider, candidates, currentId);
-  if (searchResult) return searchResult;
-
   const groups = groupModelsByPrefix(candidates);
   const groupNames = Object.keys(groups).sort();
   const useGroups = groupNames.length > 1;
 
-  if (useGroups) {
-    const groupItems = groupNames.map((g) => `${g} (${groups[g].length} models)`);
+  // Large single-family catalog: no meaningful grouping, so search-first with a
+  // flat fallback (unchanged behavior).
+  if (!useGroups) {
+    const searchResult = await searchOrSelectModel(ctx, provider, candidates, currentId);
+    if (searchResult) return searchResult;
+    return pickModelFromFlatList(ctx, provider, candidates, currentId);
+  }
+
+  // Large multi-family catalog (e.g. OpenRouter): browse families FIRST because
+  // the flat list is unmanageable, with a search escape hatch that filters
+  // across every family. Cancelling search returns to the family list.
+  const SEARCH_ALL = `Search all ${provider} models…`;
+  for (;;) {
+    const groupItems = [SEARCH_ALL, ...groupNames.map((g) => `${g} (${groups[g].length} models)`)];
     const picked = await ctx.ui.select(`Pick ${provider} model family:`, groupItems);
     if (!picked) return undefined;
+    if (picked === SEARCH_ALL) {
+      const searchResult = await searchOrSelectModel(ctx, provider, candidates, currentId);
+      if (searchResult) return searchResult;
+      continue;
+    }
     const groupName = picked.replace(/ \(\d+ models\)$/, "");
     return pickModelFromFlatList(ctx, provider, groups[groupName] ?? [], currentId, groupName);
   }
-
-  return pickModelFromFlatList(ctx, provider, candidates, currentId);
 }
 
 export async function pickRecentModel(ctx: ExtensionContext, recent: RecentModel[]): Promise<RecentModel | undefined> {
