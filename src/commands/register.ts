@@ -32,6 +32,7 @@ import { handleWaiSearchCommand } from "../wai-search.js";
 import { handleWaiSearchConfigCommand } from "../wai-search-config.js";
 import { loadYoowaiConfig, resolveTaskModel } from "../config.js";
 import { getState, getProgress, dropSessionState, resetEditsSinceReview } from "../session-state.js";
+import { loadRecentModels, saveRecentModel, formatRecentModel, type RecentModel } from "../model-history.js";
 import { clearState } from "../plan-store.js";
 import { resetCost, getSessionCost, formatCost } from "../cost-tracker.js";
 import { clearMemory } from "../review-memory.js";
@@ -104,6 +105,110 @@ export async function resolveModelThinkingDetails(
   if (sdkHasMap) return sdkModel;
   if (registryHasMap) return registryModel;
   return sdkModel ?? registryModel;
+}
+
+const MODEL_PICKER_SOFT_CAP = 20;
+const MODEL_PICKER_GROUP_CAP = 20;
+const FILTER_SENTINEL = "__wai_filter_more_models__";
+
+export interface ModelRef {
+  id: string;
+  provider: string;
+}
+
+export function formatModelItem(model: ModelRef, currentId?: string): string {
+  const marker = model.id === currentId ? " ✓ current" : "";
+  return `${model.id}${marker}`;
+}
+
+export function parseModelIdFromItem(item: string): string {
+  return item.replace(/ ✓ current$/, "");
+}
+
+export function groupModelsByPrefix(models: ModelRef[]): Record<string, ModelRef[]> {
+  const groups: Record<string, ModelRef[]> = {};
+  for (const m of models) {
+    const slashIdx = m.id.indexOf("/");
+    const prefix = slashIdx > 0 ? m.id.slice(0, slashIdx) : "(other)";
+    (groups[prefix] ??= []).push(m);
+  }
+  for (const key of Object.keys(groups)) {
+    groups[key].sort((a, b) => a.id.localeCompare(b.id));
+  }
+  return groups;
+}
+
+export async function pickModelFromFlatList(
+  ctx: ExtensionContext,
+  provider: string,
+  models: ModelRef[],
+  currentId: string,
+  groupLabel?: string,
+): Promise<string | undefined> {
+  if (models.length <= MODEL_PICKER_GROUP_CAP) {
+    const items = models.map((m) => formatModelItem(m, currentId));
+    const title = groupLabel ? `Pick ${provider} ${groupLabel} model:` : `Pick model for ${provider}:`;
+    const picked = await ctx.ui.select(title, items);
+    return picked ? parseModelIdFromItem(picked) : undefined;
+  }
+
+  const displayed = models.slice(0, MODEL_PICKER_GROUP_CAP);
+  const remaining = models.length - MODEL_PICKER_GROUP_CAP;
+  const items = displayed.map((m) => formatModelItem(m, currentId));
+  items.push(`${FILTER_SENTINEL}: Filter ${remaining} more models…`);
+  const title = groupLabel ? `Pick ${provider} ${groupLabel} model:` : `Pick model for ${provider}:`;
+  const picked = await ctx.ui.select(title, items);
+  if (!picked) return undefined;
+  if (picked.startsWith(FILTER_SENTINEL)) {
+    ctx.ui.notify(`Too many models. Narrow with /wai-model ${provider} <filter>`, "warning");
+    return undefined;
+  }
+  return parseModelIdFromItem(picked);
+}
+
+export async function pickModelFromProvider(
+  ctx: ExtensionContext,
+  provider: string,
+  models: ModelRef[],
+  currentId: string,
+  filterQuery?: string,
+): Promise<string | undefined> {
+  let candidates = models;
+  if (filterQuery) {
+    candidates = candidates.filter((m) => m.id.toLowerCase().includes(filterQuery));
+    if (candidates.length === 0) {
+      ctx.ui.notify(`No ${provider} models match "${filterQuery}".`, "warning");
+      return undefined;
+    }
+  }
+
+  if (candidates.length <= MODEL_PICKER_SOFT_CAP) {
+    const items = candidates.map((m) => formatModelItem(m, currentId));
+    const picked = await ctx.ui.select(`Pick model for ${provider}:`, items);
+    return picked ? parseModelIdFromItem(picked) : undefined;
+  }
+
+  const groups = groupModelsByPrefix(candidates);
+  const groupNames = Object.keys(groups).sort();
+  const useGroups = groupNames.length > 1;
+
+  if (useGroups) {
+    const groupItems = groupNames.map((g) => `${g} (${groups[g].length} models)`);
+    const picked = await ctx.ui.select(`Pick ${provider} model family:`, groupItems);
+    if (!picked) return undefined;
+    const groupName = picked.replace(/ \(\d+ models\)$/, "");
+    return pickModelFromFlatList(ctx, provider, groups[groupName] ?? [], currentId, groupName);
+  }
+
+  return pickModelFromFlatList(ctx, provider, candidates, currentId);
+}
+
+export async function pickRecentModel(ctx: ExtensionContext, recent: RecentModel[]): Promise<RecentModel | undefined> {
+  if (recent.length === 0) return undefined;
+  const items = ["Browse all configured models…", ...recent.map(formatRecentModel)];
+  const picked = await ctx.ui.select("Recent wai models:", items);
+  if (!picked || picked === "Browse all configured models…") return undefined;
+  return recent.find((m) => formatRecentModel(m) === picked);
 }
 
 async function showWaiStatus(ctx: ExtensionContext): Promise<void> {
@@ -592,51 +697,56 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
       const effectiveId = target?.id || currentConfig.secondary.id;
       const effectiveThinking = target?.thinking ?? currentConfig.secondary.thinking ?? "xhigh";
 
-      // 2. Pick provider.
-      const providers = [...new Set(configuredModels.map((m) => m.provider))].sort();
+      // 2. Pick provider/model, with recent-model shortcut and hierarchical grouping
+      //    for providers with huge catalogs (e.g. OpenRouter).
       let provider: string;
-      if (requestedProvider) {
-        const matched = providers.find((p) => p.toLowerCase() === requestedProvider);
-        if (!matched) {
-          ctx.ui.notify(`No configured provider matching "${tokens[0]}".`, "warning");
+      let modelId: string;
+
+      const recent = loadRecentModels(ctx.cwd);
+      const recentPicked = !requestedProvider && !filterQuery ? await pickRecentModel(ctx, recent) : undefined;
+
+      if (recentPicked) {
+        const stillConfigured = configuredModels.some(
+          (m) => m.provider === recentPicked.provider && m.id === recentPicked.id,
+        );
+        if (!stillConfigured) {
+          ctx.ui.notify(`Recent model ${recentPicked.provider}:${recentPicked.id} is no longer configured.`, "warning");
           return;
         }
-        provider = matched;
-      } else if (providers.length === 1) {
-        provider = providers[0];
+        provider = recentPicked.provider;
+        modelId = recentPicked.id;
       } else {
-        const providerItems = providers.map((p) => {
-          const count = configuredModels.filter((m) => m.provider === p).length;
-          const marker = p.toLowerCase() === effectiveProvider.toLowerCase() ? " ✓ current" : "";
-          return `${p} (${count} models)${marker}`;
-        });
-        const picked = await ctx.ui.select("Pick provider:", providerItems);
-        if (!picked) return;
-        provider = picked.replace(/ ✓ current$/, "").split(" ")[0];
-      }
-
-      // 3. Pick model.
-      let providerModels = configuredModels
-        .filter((m) => m.provider === provider)
-        .sort((a, b) => a.id.localeCompare(b.id));
-      if (filterQuery) {
-        providerModels = providerModels.filter((m) => m.id.toLowerCase().includes(filterQuery));
-        if (providerModels.length === 0) {
-          ctx.ui.notify(`No ${provider} models match "${tokens[1]}".`, "warning");
-          return;
+        const providers = [...new Set(configuredModels.map((m) => m.provider))].sort();
+        if (requestedProvider) {
+          const matched = providers.find((p) => p.toLowerCase() === requestedProvider);
+          if (!matched) {
+            ctx.ui.notify(`No configured provider matching "${tokens[0]}".`, "warning");
+            return;
+          }
+          provider = matched;
+        } else if (providers.length === 1) {
+          provider = providers[0];
+        } else {
+          const providerItems = providers.map((p) => {
+            const count = configuredModels.filter((m) => m.provider === p).length;
+            const marker = p.toLowerCase() === effectiveProvider.toLowerCase() ? " ✓ current" : "";
+            return `${p} (${count} models)${marker}`;
+          });
+          const picked = await ctx.ui.select("Pick provider:", providerItems);
+          if (!picked) return;
+          provider = picked.replace(/ ✓ current$/, "").split(" ")[0];
         }
+
+        const providerModels = configuredModels
+          .filter((m) => m.provider === provider)
+          .sort((a, b) => a.id.localeCompare(b.id));
+
+        const pickedModelId = await pickModelFromProvider(ctx, provider, providerModels, effectiveId, filterQuery);
+        if (!pickedModelId) return;
+        modelId = pickedModelId;
       }
-      const modelItems = providerModels.map((m) => {
-        const marker =
-          provider.toLowerCase() === effectiveProvider.toLowerCase() && m.id === effectiveId ? " ✓ current" : "";
-        return `${m.id}${marker}`;
-      });
 
-      const modelIdPicked = await ctx.ui.select(`Pick model for ${provider}:`, modelItems);
-      if (!modelIdPicked) return;
-      const modelId = modelIdPicked.replace(/ ✓ current$/, "");
-
-      // 4. Pick thinking level.
+      // 3. Pick thinking level.
       // Prefer the model's advertised supported levels from the Pi SDK catalog.
       const canonicalThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
       const registryModel = typeof registry.getModel === "function" ? registry.getModel(provider, modelId) : undefined;
@@ -651,7 +761,7 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
       if (!thinkingPicked) return;
       const thinking = thinkingPicked.replace(" ✓ current", "");
 
-      // 5. Save.
+      // 4. Save.
       const agentDir = getAgentDir();
       const settingsPath = join(agentDir, "settings.json");
       if (!existsSync(agentDir)) {
@@ -674,6 +784,8 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
         waiSettings.taskModels = taskModels;
         ctx.ui.notify(`Task model for ${taskAction} set to ${provider}:${modelId} (${thinking}).`, "info");
       }
+
+      saveRecentModel(ctx.cwd, { provider, id: modelId, thinking, scope: action ?? "base" });
 
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
       await refreshWaiProvider(pi, ctx.cwd);
