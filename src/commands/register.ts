@@ -31,7 +31,7 @@ import { executeWaiExplain } from "../wai-explain.js";
 import { handleWaiSearchCommand } from "../wai-search.js";
 import { handleWaiSearchConfigCommand } from "../wai-search-config.js";
 import { loadYoowaiConfig, resolveTaskModel } from "../config.js";
-import { getState, getProgress, dropSessionState } from "../session-state.js";
+import { getState, getProgress, dropSessionState, resetEditsSinceReview } from "../session-state.js";
 import { clearState } from "../plan-store.js";
 import { resetCost, getSessionCost, formatCost } from "../cost-tracker.js";
 import { clearMemory } from "../review-memory.js";
@@ -253,6 +253,9 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
         case "review": {
           const { description, options: reviewOptions } = parseReviewCommandArgs(restText);
           result = await executeWaiReview(ctx.cwd, description, ctx, reviewOptions, signal, notifyProgress);
+          // A manual review counts as a review: keep the unreviewed-edits
+          // steer in sync, but only when the review actually ran.
+          if (!result.error) resetEditsSinceReview(ctx.cwd);
           break;
         }
         case "suggest":
@@ -882,18 +885,22 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: nextHandler,
   });
 
-  const doneHandler = async (_args: string, ctx: ExtensionContext) => {
+  const doneHandler = async (args: string, ctx: ExtensionContext) => {
     const signal = undefined;
+    const target = args.trim() || undefined;
     const planProgress = getProgress(ctx.cwd);
     if (planProgress.total === 0) {
       ctx.ui.notify("No active wai plan. Start one with /wai plan <task>.", "warning");
       return;
     }
-    if (planProgress.completed >= planProgress.total) {
+    // An explicit numeric target below the current progress is a regression
+    // request and must be allowed even when all steps are complete.
+    const isRegression = target !== undefined && /^\d+$/.test(target) && Number(target) < planProgress.completed;
+    if (planProgress.completed >= planProgress.total && !isRegression) {
       ctx.ui.notify("All plan steps are already complete. Run /wai judge for a final review.", "info");
       return;
     }
-    const doneResult = await executeWaiDone(ctx.cwd, undefined, signal);
+    const doneResult = await executeWaiDone(ctx.cwd, target, signal);
     clearWaiStatus(ctx);
     publishWaiResult(ctx, { action: "done", done: doneResult });
     const text = formatResultText({ action: "done", done: doneResult });
@@ -905,7 +912,8 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
   };
 
   pi.registerCommand("wai-done", {
-    description: "Mark the current wai plan step complete and recommend the next step",
+    description:
+      "Mark the current wai plan step complete and recommend the next step. Usage: /wai-done [step number|'all'|description] — a lower number regresses the tracker, 0 resets it",
     handler: doneHandler,
   });
 

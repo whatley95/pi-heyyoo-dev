@@ -220,7 +220,10 @@ export default async function (pi: ExtensionAPI) {
         result = await executeWaiScan(ctx.cwd, signal, progress, ctx.sessionManager, p.scanDeep);
       }
 
-      if (p.review) resetEditsSinceReview(ctx.cwd);
+      // Only clear the review-edit counter when the review actually ran. An
+      // errored review (e.g. model unavailable) saw nothing, so resetting here
+      // would suppress the unreviewed-edits steer for work no one looked at.
+      if (p.review && !result.error) resetEditsSinceReview(ctx.cwd);
       // Only clear the done-edit counter when the step actually advanced. A
       // failed verification returns early without advancing, so clearing here
       // would let the next retry bypass the verification gate entirely.
