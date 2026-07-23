@@ -211,6 +211,11 @@ export async function pickModelFromProvider(
     return picked ? parseModelIdFromItem(picked) : undefined;
   }
 
+  // For large catalogs, ask for a search query first (like Pi's /models).
+  // If the user cancels or the query matches nothing, fall back to grouped browsing.
+  const searchResult = await promptSearchModels(ctx, provider, candidates, currentId);
+  if (searchResult) return searchResult;
+
   const groups = groupModelsByPrefix(candidates);
   const groupNames = Object.keys(groups).sort();
   const useGroups = groupNames.length > 1;

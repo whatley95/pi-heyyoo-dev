@@ -207,8 +207,18 @@ describe("model picker helpers", () => {
     assert.strictEqual(result, "gpt-4o");
   });
 
-  it("pickModelFromProvider groups hierarchical models and returns a selection", async () => {
-    const ctx = fakeContext(["openai (11 models)", "openai/model-3"]);
+  it("pickModelFromProvider groups hierarchical models after search is cancelled", async () => {
+    const ctx = fakeContext(["openai (11 models)", "openai/model-3"], [undefined]);
+    const models: ModelRef[] = [
+      ...Array.from({ length: 11 }, (_, i) => ({ id: `openai/model-${i}`, provider: "openrouter" })),
+      ...Array.from({ length: 11 }, (_, i) => ({ id: `anthropic/model-${i}`, provider: "openrouter" })),
+    ];
+    const result = await pickModelFromProvider(ctx, "openrouter", models, "");
+    assert.strictEqual(result, "openai/model-3");
+  });
+
+  it("pickModelFromProvider uses search-first for large catalogs", async () => {
+    const ctx = fakeContext(["openai/model-3"], ["model-3"]);
     const models: ModelRef[] = [
       ...Array.from({ length: 11 }, (_, i) => ({ id: `openai/model-${i}`, provider: "openrouter" })),
       ...Array.from({ length: 11 }, (_, i) => ({ id: `anthropic/model-${i}`, provider: "openrouter" })),
@@ -285,16 +295,6 @@ describe("model picker helpers", () => {
     const models: ModelRef[] = [{ id: "openai/gpt-4o", provider: "openrouter" }];
     const result = await promptSearchModels(ctx, "openrouter", models, "");
     assert.strictEqual(result, undefined);
-  });
-
-  it("pickModelFromProvider opens search when the search sentinel is selected", async () => {
-    const ctx = fakeContext(["🔎 Search all openrouter models…", "openai/model-3"], ["model-3"]);
-    const models: ModelRef[] = [
-      ...Array.from({ length: 11 }, (_, i) => ({ id: `openai/model-${i}`, provider: "openrouter" })),
-      ...Array.from({ length: 11 }, (_, i) => ({ id: `anthropic/model-${i}`, provider: "openrouter" })),
-    ];
-    const result = await pickModelFromProvider(ctx, "openrouter", models, "");
-    assert.strictEqual(result, "openai/model-3");
   });
 
   it("pickModelFromFlatList opens search when the search sentinel is selected", async () => {

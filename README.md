@@ -314,7 +314,7 @@ Recorded facts appear in `wai_index({ topic: "learned" })`.
 | `/wai-done all`                               | Mark all steps complete                                                   |
 | `/wai-plan-update <new task description>`     | Regenerate the active plan; already-completed progress is preserved       |
 
-**`/wai-model` selection flow.** Recent model choices are shown first so you can re-select a model in one click. When browsing a provider with a huge catalog (e.g. OpenRouter), models are grouped by the first segment of their ID (`openai/...`, `anthropic/...`, etc.) so no single menu is overwhelming. Every long menu also offers a **🔎 Search** option that opens a text prompt; type a substring (e.g. `claude`, `gpt-4o`, `llama`) and only matching models are shown. The final selection is saved to a recent-models list scoped to the project.
+**`/wai-model` selection flow.** Recent model choices are shown first so you can re-select a model in one click. For providers with a huge catalog (e.g. OpenRouter), `/wai-model` opens a text search prompt first — type a substring like `claude`, `gpt-4o`, or `llama` and only matching models are shown. If you cancel the search or it matches nothing, it falls back to a family-grouped menu. The final selection is saved to a recent-models list scoped to the project.
 
 ### Utilities and diagnostics
 
