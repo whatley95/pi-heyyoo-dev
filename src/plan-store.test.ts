@@ -61,6 +61,21 @@ describe("plan-store", () => {
     }
   });
 
+  it("round-trips the editedFiles tracker list", () => {
+    const state: YoowaiSessionState = {
+      completedSteps: 0,
+      totalSteps: 0,
+      reviewRounds: [],
+      reviewedSteps: [],
+      editsSinceLastReview: 2,
+      editsSinceLastDone: 2,
+      editedFiles: ["src/a.ts", "src/b.ts"],
+    };
+    saveState(cwd, state);
+    const loaded = loadState(cwd);
+    assert.deepEqual(loaded?.editedFiles, ["src/a.ts", "src/b.ts"]);
+  });
+
   it("cleans up temp dir", () => {
     rmSync(cwd, { recursive: true, force: true });
     assert.ok(true);

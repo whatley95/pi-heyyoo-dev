@@ -14,6 +14,9 @@ import {
   setLastReviewedCommit,
   markStepsDoneByIds,
   setPlanProgress,
+  recordFileEdit,
+  resetEditsSinceReview,
+  getEditTracker,
 } from "./session-state.js";
 import type { PlanResult } from "./types.js";
 
@@ -141,4 +144,35 @@ test("setPlanProgress advances and regresses, clearing reviewed flags and re-arm
   assert.equal(getProgress(cwd).completed, 3);
   setPlanProgress(cwd, -5);
   assert.equal(getProgress(cwd).completed, 0);
+});
+
+test("recordFileEdit tracks edited file paths, deduped, cleared on review reset", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  recordFileEdit(cwd, "src/a.ts");
+  recordFileEdit(cwd, "src/b.ts");
+  recordFileEdit(cwd, "src/a.ts");
+  recordFileEdit(cwd); // no path — counter still increments
+
+  const tracker = getEditTracker(cwd);
+  assert.equal(tracker.editsSinceLastReview, 4);
+  assert.deepEqual(tracker.editedFiles, ["src/a.ts", "src/b.ts"]);
+
+  resetEditsSinceReview(cwd);
+  assert.equal(getEditTracker(cwd).editsSinceLastReview, 0);
+  assert.deepEqual(getEditTracker(cwd).editedFiles, []);
+});
+
+test("setPlan resets the edited-files tracker so a new plan starts clean", () => {
+  const cwd = tempCwd();
+  setPlan(cwd, plan);
+  recordFileEdit(cwd, "src/old-task.ts");
+  assert.deepEqual(getEditTracker(cwd).editedFiles, ["src/old-task.ts"]);
+
+  // Moving to a new task/plan must not leak the old task's files or counters.
+  setPlan(cwd, { summary: "next task", todo: ["new step"], acceptanceCriteria: [] });
+  const tracker = getEditTracker(cwd);
+  assert.deepEqual(tracker.editedFiles, []);
+  assert.equal(tracker.editsSinceLastReview, 0);
+  assert.equal(tracker.editsSinceLastDone, 0);
 });

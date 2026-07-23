@@ -40,6 +40,9 @@ export function loadState(cwd: string): YoowaiSessionState | null {
       judgeCompleted: typeof data.judgeCompleted === "boolean" ? data.judgeCompleted : false,
       editsSinceLastReview: typeof data.editsSinceLastReview === "number" ? data.editsSinceLastReview : 0,
       editsSinceLastDone: typeof data.editsSinceLastDone === "number" ? data.editsSinceLastDone : 0,
+      editedFiles: Array.isArray(data.editedFiles)
+        ? data.editedFiles.filter((f): f is string => typeof f === "string" && f.length > 0)
+        : [],
     };
   } catch (err) {
     logEvent(cwd, "warn", "Failed to load wai plan state", { error: err instanceof Error ? err.message : String(err) });
@@ -83,6 +86,7 @@ export function saveState(cwd: string, state: YoowaiSessionState): void {
           judgeCompleted: state.judgeCompleted === true,
           editsSinceLastReview: state.editsSinceLastReview ?? 0,
           editsSinceLastDone: state.editsSinceLastDone ?? 0,
+          editedFiles: state.editedFiles ?? [],
         },
         null,
         2,

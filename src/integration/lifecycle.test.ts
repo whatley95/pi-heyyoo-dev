@@ -231,6 +231,41 @@ describe("lifecycle", () => {
     assert.ok(steers[0].message.includes("No active wai plan"));
   });
 
+  it("lists actually edited files in the steer, capped at five", () => {
+    const { pi, steers, emitToolResult, emitTurnEnd } = createFakePi();
+    registerLifecycleHandlers(pi, makeLoopStates(cwd));
+
+    for (let i = 1; i <= 7; i++) {
+      emitToolResult(
+        {
+          type: "tool_result",
+          toolName: "write",
+          toolCallId: String(i),
+          input: { path: `src/file${i}.ts` },
+          content: [],
+          isError: false,
+        } as unknown as ToolResultEvent,
+        makeContext(cwd),
+      );
+    }
+
+    emitTurnEnd(
+      {
+        type: "turn_end",
+        turnIndex: 1,
+        message: { role: "assistant", content: [] },
+        toolResults: [{ toolName: "write", isError: false, content: [] }],
+      } as unknown as TurnEndEvent,
+      makeContext(cwd),
+    );
+
+    assert.strictEqual(steers.length, 1);
+    assert.ok(steers[0].message.includes("src/file1.ts"));
+    assert.ok(steers[0].message.includes("src/file5.ts"));
+    assert.ok(!steers[0].message.includes("src/file6.ts"));
+    assert.ok(steers[0].message.includes("(+2 more)"));
+  });
+
   it("respects steer cooldown at turn_end", () => {
     setPlan(cwd, { summary: "Refactor auth", todo: ["Step 1"], acceptanceCriteria: [] });
     const state = getState(cwd);

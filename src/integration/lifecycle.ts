@@ -97,6 +97,24 @@ export async function triggerAutoJudge(
   }
 }
 
+/** Best-effort extraction of the target file path from a write/edit tool
+ *  result's input. Tool schemas vary (`path`, `file_path`, ...), so probe the
+ *  common keys. Returned relative to cwd for display. */
+function extractEditedFilePath(event: ToolResultEvent, cwd: string): string | undefined {
+  const input = (event as { input?: unknown }).input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  for (const key of ["path", "file_path", "filePath", "filename"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) {
+      const normalized = value.replace(/\\/g, "/");
+      const prefix = cwd.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+      return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+    }
+  }
+  return undefined;
+}
+
 export function registerLifecycleHandlers(
   pi: ExtensionAPI,
   _loopStates: Map<string, LoopDetectionState>,
@@ -107,7 +125,7 @@ export function registerLifecycleHandlers(
       // Count successful file mutations accurately. Failed/aborted/error results
       // do not represent completed edits.
       if ((isWriteToolResult(event) || isEditToolResult(event)) && !event.isError) {
-        recordFileEdit(ctx.cwd);
+        recordFileEdit(ctx.cwd, extractEditedFilePath(event, ctx.cwd));
         updateWaiStatus(ctx);
       }
     } catch {
@@ -130,8 +148,16 @@ export function registerLifecycleHandlers(
       if (state.lastSteerAt && now - state.lastSteerAt < STEER_COOLDOWN_MS) return;
 
       const config = loadYoowaiConfig(ctx.cwd);
-      const { changedFiles } = getDiff(ctx.cwd, { maxDiffChars: config.reviewMaxDiffChars });
-      const fileList = changedFiles.length > 0 ? ` in: ${changedFiles.slice(0, 5).join(", ")}` : "";
+      // Prefer the files the agent actually edited (accurate and VCS-independent);
+      // fall back to the diff's changed files when paths could not be captured.
+      let changedFiles = editState.editedFiles;
+      if (changedFiles.length === 0) {
+        changedFiles = getDiff(ctx.cwd, { maxDiffChars: config.reviewMaxDiffChars }).changedFiles;
+      }
+      const fileList =
+        changedFiles.length > 0
+          ? ` in: ${changedFiles.slice(0, 5).join(", ")}${changedFiles.length > 5 ? ` (+${changedFiles.length - 5} more)` : ""}`
+          : "";
 
       state.lastSteerAt = now;
       // Nudge the plan tick too: tracker drift mostly happens because agents

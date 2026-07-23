@@ -34,6 +34,7 @@ export function setPlan(cwd: string, plan: PlanResult): void {
   state.judgeCompleted = false;
   state.editsSinceLastReview = 0;
   state.editsSinceLastDone = 0;
+  state.editedFiles = [];
   state.lastSteerAt = undefined;
   state.lastReviewedCommit = undefined;
   saveState(cwd, state);
@@ -164,15 +165,24 @@ export function markJudgeCompleted(cwd: string): void {
   saveState(cwd, state);
 }
 
-export function recordFileEdit(cwd: string): void {
+const MAX_TRACKED_EDITED_FILES = 50;
+
+export function recordFileEdit(cwd: string, filePath?: string): void {
   const state = getState(cwd);
   state.editsSinceLastReview++;
   state.editsSinceLastDone++;
+  if (filePath) {
+    state.editedFiles ??= [];
+    if (!state.editedFiles.includes(filePath) && state.editedFiles.length < MAX_TRACKED_EDITED_FILES) {
+      state.editedFiles.push(filePath);
+    }
+  }
 }
 
 export function resetEditsSinceReview(cwd: string): void {
   const state = getState(cwd);
   state.editsSinceLastReview = 0;
+  state.editedFiles = [];
 }
 
 export function resetEditsSinceDone(cwd: string): void {
@@ -180,9 +190,17 @@ export function resetEditsSinceDone(cwd: string): void {
   state.editsSinceLastDone = 0;
 }
 
-export function getEditTracker(cwd: string): { editsSinceLastReview: number; editsSinceLastDone: number } {
+export function getEditTracker(cwd: string): {
+  editsSinceLastReview: number;
+  editsSinceLastDone: number;
+  editedFiles: string[];
+} {
   const state = getState(cwd);
-  return { editsSinceLastReview: state.editsSinceLastReview, editsSinceLastDone: state.editsSinceLastDone };
+  return {
+    editsSinceLastReview: state.editsSinceLastReview,
+    editsSinceLastDone: state.editsSinceLastDone,
+    editedFiles: state.editedFiles ?? [],
+  };
 }
 
 export function getLastReviewedCommit(cwd: string): string | undefined {

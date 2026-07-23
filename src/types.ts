@@ -192,6 +192,8 @@ export interface YoowaiSessionState {
   judgeCompleted?: boolean;
   editsSinceLastReview: number;
   editsSinceLastDone: number;
+  /** Files edited since the last review (mirrors editsSinceLastReview), used for reminder file lists. */
+  editedFiles?: string[];
   lastSteerAt?: number;
   lastReviewedCommit?: string;
 }
