@@ -201,7 +201,34 @@ describe("lifecycle", () => {
     assert.strictEqual(steers.length, 1);
     assert.ok(steers[0].message.includes("3 file edit(s) since the last review"));
     assert.ok(steers[0].message.includes("WORKFLOW REMINDER"));
+    // An active plan with remaining steps adds the done nudge.
+    assert.ok(steers[0].message.includes("wai({ done: true })"));
+    assert.ok(steers[0].message.includes("plan step (1/1)"));
     assert.strictEqual(steers[0].options?.deliverAs, "steer");
+  });
+
+  it("omits the done nudge in the steer when no plan is active", () => {
+    const state = getState(cwd);
+    state.editsSinceLastReview = 3;
+
+    const { pi, steers, emitTurnEnd } = createFakePi();
+    registerLifecycleHandlers(pi, makeLoopStates(cwd));
+
+    emitTurnEnd(
+      {
+        type: "turn_end",
+        turnIndex: 1,
+        message: { role: "assistant", content: [] },
+        toolResults: [{ toolName: "write", isError: false, content: [] }],
+      } as unknown as TurnEndEvent,
+      makeContext(cwd),
+    );
+
+    assert.strictEqual(steers.length, 1);
+    assert.ok(steers[0].message.includes("WORKFLOW REMINDER"));
+    assert.ok(!steers[0].message.includes("done: true"));
+    // Without an active plan, the steer nudges plan creation instead.
+    assert.ok(steers[0].message.includes("No active wai plan"));
   });
 
   it("respects steer cooldown at turn_end", () => {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI, ContextEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { registerContextInjector, setWaiToolExecuting } from "./context-injector.js";
-import { setPlan, recordFileEdit } from "../session-state.js";
+import { setPlan, recordFileEdit, setPlanProgress } from "../session-state.js";
 import { saveConventions } from "../conventions.js";
 
 type FakePi = {
@@ -212,5 +212,46 @@ describe("context-injector", () => {
     assert.ok(typeof lastUser.content === "string");
     assert.ok(lastUser.content.includes("WORKFLOW REMINDER"));
     assert.ok(lastUser.content.includes("3 file edit(s) since the last review"));
+    // An active plan with remaining steps adds the done nudge.
+    assert.ok(lastUser.content.includes("wai({ done: true })"));
+    assert.ok(lastUser.content.includes("plan step (1/1)"));
+  });
+
+  it("nudges judge when the plan is complete but never judged", () => {
+    setPlan(cwd, {
+      summary: "Refactor auth",
+      todo: ["Step 1", "Step 2"],
+      acceptanceCriteria: [],
+    });
+    setPlanProgress(cwd, 2);
+
+    const { pi, emitContext } = createFakePi();
+    registerContextInjector(pi);
+
+    const event = makeMessages();
+    emitContext(event, makeContext(cwd));
+
+    const lastUser = event.messages.find((m) => m.role === "user");
+    assert.ok(lastUser);
+    assert.ok(typeof lastUser.content === "string");
+    assert.ok(lastUser.content.includes("PLAN COMPLETE"));
+    assert.ok(lastUser.content.includes("wai({ judge"));
+  });
+
+  it("nudges plan creation when edits pile up with no active plan", () => {
+    recordFileEdit(cwd);
+    recordFileEdit(cwd);
+    recordFileEdit(cwd);
+
+    const { pi, emitContext } = createFakePi();
+    registerContextInjector(pi);
+
+    const event = makeMessages();
+    emitContext(event, makeContext(cwd));
+
+    const lastUser = event.messages.find((m) => m.role === "user");
+    assert.ok(lastUser);
+    assert.ok(typeof lastUser.content === "string");
+    assert.ok(lastUser.content.includes("No active wai plan"));
   });
 });

@@ -60,9 +60,35 @@ function buildContextBlock(cwd: string): string {
   if (planSummary) parts.push(planSummary);
   if (conventionsText) parts.push(`<project_conventions>\n${conventionsText}\n</project_conventions>`);
   if (editState.editsSinceLastReview >= reviewThreshold) {
+    const state = getState(cwd);
+    const planNudge =
+      state.plan && state.completedSteps < state.totalSteps
+        ? ` If this work completes the current plan step (${state.completedSteps + 1}/${state.totalSteps}), call \`wai({ done: true })\` after the review passes to keep the plan tracker in sync.`
+        : "";
+    const noPlanNudge =
+      !state.plan || state.totalSteps === 0
+        ? ` No active wai plan — if this is non-trivial work, create one first with \`wai({ plan: "..." })\`.`
+        : "";
     parts.push(
       `WORKFLOW REMINDER: you have made ${editState.editsSinceLastReview} file edit(s) since the last review. ` +
-        `Call \`wai({ review: "..." })\` to review the changes before continuing.`,
+        `Call \`wai({ review: "..." })\` to review the changes before continuing.${planNudge}${noPlanNudge}`,
+    );
+  }
+
+  // Judge-pending nudge: the plan is fully marked done but never judged, and
+  // autoJudge (off by default) will not run it. Without this the workflow
+  // silently stops one step early.
+  const planState = getState(cwd);
+  if (
+    planState.plan &&
+    planState.totalSteps > 0 &&
+    planState.completedSteps >= planState.totalSteps &&
+    !planState.judgeCompleted &&
+    config.autoJudge !== true
+  ) {
+    parts.push(
+      `PLAN COMPLETE: all ${planState.totalSteps} plan steps are marked done. ` +
+        `Call \`wai({ judge: "..." })\` for a final holistic review before declaring the work complete.`,
     );
   }
 

@@ -134,9 +134,19 @@ export function registerLifecycleHandlers(
       const fileList = changedFiles.length > 0 ? ` in: ${changedFiles.slice(0, 5).join(", ")}` : "";
 
       state.lastSteerAt = now;
+      // Nudge the plan tick too: tracker drift mostly happens because agents
+      // review but forget to mark the step done. Only when a plan is active.
+      const planNudge =
+        state.plan && state.completedSteps < state.totalSteps
+          ? ` If this work completes the current plan step (${state.completedSteps + 1}/${state.totalSteps}), call \`wai({ done: true })\` after the review passes to keep the plan tracker in sync.`
+          : "";
+      const noPlanNudge =
+        !state.plan || state.totalSteps === 0
+          ? ` No active wai plan — if this is non-trivial work, create one first with \`wai({ plan: '...' })\`.`
+          : "";
       pi.sendUserMessage(
         `WORKFLOW REMINDER: you have made ${editState.editsSinceLastReview} file edit(s) since the last review. ` +
-          `Call \`wai({ review: '...' })\` to review the changes${fileList} before continuing.`,
+          `Call \`wai({ review: '...' })\` to review the changes${fileList} before continuing.${planNudge}${noPlanNudge}`,
         { deliverAs: "steer" },
       );
       updateWaiStatus(ctx);
