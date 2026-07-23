@@ -93,6 +93,16 @@ const EVIDENCE_RULES = `EVIDENCE REQUIREMENTS:
 - Do not invent files, failures, lines, or evidence not shown in the provided context.
 - Respect project conventions; do NOT flag a pattern as wrong if it matches the conventions shown.`;
 
+const PLAN_STALE_RULE =
+  "If the current plan step contradicts the actual code (e.g., describes a different endpoint, method, parameter, or design than what is implemented), treat the plan as stale. Trust the code and note that the plan should be updated. Do not flag the code as wrong solely because it differs from the plan.";
+
+/** Scope-guard rules shared by the diff-based prompts (review/test/security).
+ *  The structure and the plan-stale rule live in exactly one place so fixes
+ *  propagate to every prompt; the per-action wording stays explicit. */
+function diffScopeRules(args: { diffScope: string; noDiffScope: string; stepScope: string }): string {
+  return [args.diffScope, args.noDiffScope, args.stepScope, PLAN_STALE_RULE].map((rule) => `- ${rule}`).join("\n");
+}
+
 const MAX_CACHED_PROMPT_SIZE = 50_000;
 const promptCacheClearers: Array<() => void> = [];
 
@@ -279,10 +289,14 @@ Rules:
 - Pay attention to pre-review command output (lint/test/typecheck). Failures there are real issues ONLY for files changed in this diff; ignore pre-existing warnings in unrelated files.
 - Memory shows past issues in the same files. If a past issue appears again, flag it as regression.
 - CRITICAL: Only flag issues you can see evidence for. If a property, method, template, or style exists in the provided full file contents, do NOT flag it as missing. When unsure, prefer "pass" or "low" severity over guessing.
-- When reviewing a code change (a diff is provided), only flag issues in files that are part of that change. Do NOT flag pre-existing problems in unrelated files.
-- When no diff is provided and the developer asks you to review a specific function/file, review exactly that requested scope.
-- If a current plan step is shown above, only evaluate acceptance criteria that are relevant to that step. Do NOT flag work from other plan steps as missing.
-- If the current plan step contradicts the actual code (e.g., describes a different endpoint, method, parameter, or design than what is implemented), treat the plan as stale. Trust the code and note that the plan should be updated. Do not flag the code as wrong solely because it differs from the plan.
+${diffScopeRules({
+  diffScope:
+    "When reviewing a code change (a diff is provided), only flag issues in files that are part of that change. Do NOT flag pre-existing problems in unrelated files.",
+  noDiffScope:
+    "When no diff is provided and the developer asks you to review a specific function/file, review exactly that requested scope.",
+  stepScope:
+    "If a current plan step is shown above, only evaluate acceptance criteria that are relevant to that step. Do NOT flag work from other plan steps as missing.",
+})}
 - Be strict but fair — flag real problems, not preferences
 ${EVIDENCE_RULES}`,
 
@@ -480,10 +494,14 @@ Rules:
 - "findings" should include failing tests, brittle tests, missing assertions, or tests that do not verify the described behavior
 - "missingTests" should list concrete production files whose changed behavior lacks a corresponding test
 - Be specific and evidence-based; do not invent files or failures not shown in the test output or diff
-- When reviewing a code change (a diff is provided), only flag test issues in files that are part of that change. Do NOT flag pre-existing test failures or missing tests in unrelated files.
-- When no diff is provided and the developer asks about a specific function/file, evaluate exactly that requested scope.
-- If a current plan step is shown above, only evaluate test coverage relevant to that step. Do NOT flag missing tests for work from other plan steps.
-- If the current plan step contradicts the actual code (e.g., describes a different endpoint, method, parameter, or design than what is implemented), treat the plan as stale. Trust the code and note that the plan should be updated. Do not flag the code as wrong solely because it differs from the plan.
+${diffScopeRules({
+  diffScope:
+    "When reviewing a code change (a diff is provided), only flag test issues in files that are part of that change. Do NOT flag pre-existing test failures or missing tests in unrelated files.",
+  noDiffScope:
+    "When no diff is provided and the developer asks about a specific function/file, evaluate exactly that requested scope.",
+  stepScope:
+    "If a current plan step is shown above, only evaluate test coverage relevant to that step. Do NOT flag missing tests for work from other plan steps.",
+})}
 - "missingTests" should list only production files whose behavior is changed by the diff and lack a corresponding test.
 - Respect project conventions when suggesting test file names or patterns
 ${EVIDENCE_RULES}`,
@@ -532,10 +550,14 @@ Rules:
 - Each finding must include a specific, actionable remediation suggestion
 - Categories must be one of: secrets, injection, auth, access-control, validation, dependencies, crypto, logging, other
 - Do not flag speculative risks with no evidence in the provided diff or files
-- When auditing a code change (a diff is provided), only flag security findings in files that are part of that change. Do NOT flag pre-existing vulnerabilities in unrelated files.
-- When no diff is provided and the developer asks about a specific function/file, audit exactly that requested scope.
-- If a current plan step is shown above, only evaluate security risks relevant to that step. Do NOT flag missing security work from other plan steps.
-- If the current plan step contradicts the actual code (e.g., describes a different endpoint, method, parameter, or design than what is implemented), treat the plan as stale. Trust the code and note that the plan should be updated. Do not flag the code as wrong solely because it differs from the plan.
+${diffScopeRules({
+  diffScope:
+    "When auditing a code change (a diff is provided), only flag security findings in files that are part of that change. Do NOT flag pre-existing vulnerabilities in unrelated files.",
+  noDiffScope:
+    "When no diff is provided and the developer asks about a specific function/file, audit exactly that requested scope.",
+  stepScope:
+    "If a current plan step is shown above, only evaluate security risks relevant to that step. Do NOT flag missing security work from other plan steps.",
+})}
 - Pay special attention to: hardcoded secrets, SQL/command injection, unsafe eval, missing input validation, insecure auth, permissive CORS, dependency upgrades, and logging sensitive data
 ${EVIDENCE_RULES}`,
 
