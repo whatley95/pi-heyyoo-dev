@@ -31,6 +31,7 @@ import { executeWaiExplain } from "../wai-explain.js";
 import { handleWaiSearchCommand } from "../wai-search.js";
 import { handleWaiSearchConfigCommand } from "../wai-search-config.js";
 import { loadYoowaiConfig, resolveTaskModel } from "../config.js";
+import type { YoowaiConfig } from "../types.js";
 import { getState, getProgress, dropSessionState, resetEditsSinceReview } from "../session-state.js";
 import { loadRecentModels, saveRecentModel, formatRecentModel, type RecentModel } from "../model-history.js";
 import { searchableSelect } from "./searchable-select.js";
@@ -110,6 +111,59 @@ export async function resolveModelThinkingDetails(
 
 const MODEL_PICKER_SOFT_CAP = 20;
 const MODEL_PICKER_GROUP_CAP = 20;
+
+/** Build the saved model-config entry by overlaying the newly selected
+ *  provider/id/thinking onto any existing entry. This preserves
+ *  provider-specific fields (baseUrl, style, backend, apiKey, cacheRetention,
+ *  transport, authHeader, authPrefix, contextWindow, maxOutputTokens,
+ *  maxRetries, maxRetryDelayMs, timeoutMs) so that
+ *  re-selecting a model via /wai-model does not wipe a custom-endpoint config.
+ *  If the provider changes, every provider-specific field is dropped so the new
+ *  provider isn't authenticated or pointed at the old provider's endpoint. */
+export function buildModelConfigEntry(
+  prev: Record<string, unknown> | undefined,
+  next: { provider: string; id: string; thinking: string },
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {
+    ...(prev ?? {}),
+    provider: next.provider,
+    id: next.id,
+    thinking: next.thinking,
+  };
+  if (typeof prev?.provider === "string" && prev.provider !== next.provider) {
+    // Drop all provider-specific fields so a switch doesn't carry the old
+    // provider's endpoint, auth, or SDK tuning onto the new provider.
+    for (const key of [
+      "baseUrl",
+      "style",
+      "authHeader",
+      "authPrefix",
+      "apiKey",
+      "backend",
+      "transport",
+      "cacheRetention",
+      "contextWindow",
+      "maxOutputTokens",
+      "maxRetries",
+      "maxRetryDelayMs",
+      "timeoutMs",
+    ])
+      delete merged[key];
+  }
+  return merged;
+}
+
+/** Whether a given /wai-model scope option has its own configured model entry.
+ *  Used to mark scope options with "✓ current" independently, since the base
+ *  secondary model and per-tool task models can each be configured at once. */
+export function isScopeConfigured(scope: string, config: YoowaiConfig): boolean {
+  if (scope === "Base secondary model") {
+    return !!(config.secondary.provider && config.secondary.id);
+  }
+  const action = scope.replace(/^Use for /, "").replace(/ only$/, "") as WaiModelTask;
+  const override = config.taskModels?.[action];
+  return !!(override?.provider && override?.id);
+}
 
 export interface ModelRef {
   id: string;
@@ -696,14 +750,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
 
       // 1. Pick which wai tool this model is for.
       const scopeOptions = ["Base secondary model", ...WAI_MODEL_TASKS.map((a) => `Use for ${a} only`)];
-      const currentScope = (() => {
-        if (currentConfig.secondary.provider && currentConfig.secondary.id) return "Base secondary model";
-        const action = WAI_MODEL_TASKS.find((a) => {
-          const override = currentConfig.taskModels?.[a];
-          return override?.provider && override?.id;
-        });
-        return action ? `Use for ${action} only` : undefined;
-      })();
       const scopeModelText = (scope: string): string => {
         const isBase = scope === "Base secondary model";
         const action = isBase ? undefined : (scope.replace(/^Use for /, "").replace(/ only$/, "") as WaiModelTask);
@@ -711,8 +757,10 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
         if (!model.provider || !model.id) return "not configured";
         return `${model.provider}:${model.id}${model.thinking ? ` · ${model.thinking}` : ""}`;
       };
+      // Each scope is marked "✓ current" based on its own config entry (base and
+      // per-tool task models coexist), rather than pinning the marker to Base.
       const scopeItems = scopeOptions.map(
-        (s) => `${s} — ${scopeModelText(s)}${s === currentScope ? " ✓ current" : ""}`,
+        (s) => `${s} — ${scopeModelText(s)}${isScopeConfigured(s, currentConfig) ? " ✓ current" : ""}`,
       );
       const scopePicked = await ctx.ui.select("Which wai tool should use this model?", scopeItems);
       if (!scopePicked) return;
@@ -805,12 +853,19 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
       const waiSettings = settings["pi-yoowai"] as Record<string, unknown>;
 
       if (scope === "Base secondary model") {
-        waiSettings.secondary = { provider, id: modelId, thinking };
+        // Merge into the existing secondary config instead of replacing it, so
+        // provider-specific fields (baseUrl, style, backend, apiKey, cacheRetention,
+        // transport, authHeader, authPrefix, contextWindow, maxOutputTokens) are
+        // preserved when the user re-selects a model via /wai-model.
+        const prevSecondary = (waiSettings.secondary as Record<string, unknown>) || {};
+        waiSettings.secondary = buildModelConfigEntry(prevSecondary, { provider, id: modelId, thinking });
         ctx.ui.notify(`Secondary model set to ${provider}:${modelId} (${thinking}).`, "info");
       } else {
         const taskModels = (waiSettings.taskModels as Record<string, unknown>) || {};
         const taskAction = action as WaiModelTask;
-        taskModels[taskAction] = { provider, id: modelId, thinking };
+        // Merge into any existing task override so non-model fields survive.
+        const prevTask = (taskModels[taskAction] as Record<string, unknown>) || {};
+        taskModels[taskAction] = buildModelConfigEntry(prevTask, { provider, id: modelId, thinking });
         waiSettings.taskModels = taskModels;
         ctx.ui.notify(`Task model for ${taskAction} set to ${provider}:${modelId} (${thinking}).`, "info");
       }

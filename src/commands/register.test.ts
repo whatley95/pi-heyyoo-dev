@@ -10,6 +10,8 @@ import {
   pickModelFromProvider,
   pickRecentModel,
   promptSearchModels,
+  buildModelConfigEntry,
+  isScopeConfigured,
   type ModelRef,
 } from "./register.js";
 import { setSdkGetModelOverride } from "../backends/sdk-backend.js";
@@ -137,6 +139,86 @@ describe("resolveModelThinkingDetails", () => {
     } finally {
       setSdkGetModelOverride(null);
     }
+  });
+});
+
+describe("isScopeConfigured", () => {
+  const baseConfigured = { secondary: { provider: "openai", id: "gpt-4o" }, taskModels: {} };
+  const taskConfigured = {
+    secondary: { provider: "openai", id: "gpt-4o" },
+    taskModels: { review: { provider: "anthropic", id: "claude" } },
+  };
+
+  it("marks Base as current only when the base secondary is set", () => {
+    assert.strictEqual(isScopeConfigured("Base secondary model", baseConfigured), true);
+    assert.strictEqual(isScopeConfigured("Base secondary model", { secondary: { provider: "", id: "" } }), false);
+  });
+
+  it("marks a task scope current only when that task override is set (independent of base)", () => {
+    assert.strictEqual(isScopeConfigured("Use for review only", taskConfigured), true);
+    assert.strictEqual(isScopeConfigured("Use for suggest only", taskConfigured), false);
+    // Base configured but no task override: task scope is NOT current.
+    assert.strictEqual(isScopeConfigured("Use for review only", baseConfigured), false);
+  });
+});
+
+describe("buildModelConfigEntry", () => {
+  it("preserves existing provider-specific fields when re-selecting the same provider", () => {
+    const prev = { provider: "opencode-custom", id: "old/model", thinking: "xhigh", baseUrl: "https://x/v1", style: "openai-compatible", backend: "http" };
+    const entry = buildModelConfigEntry(prev, { provider: "opencode-custom", id: "new/model", thinking: "high" });
+    assert.strictEqual(entry.baseUrl, "https://x/v1");
+    assert.strictEqual(entry.style, "openai-compatible");
+    assert.strictEqual(entry.backend, "http");
+    assert.strictEqual(entry.provider, "opencode-custom");
+    assert.strictEqual(entry.id, "new/model");
+    assert.strictEqual(entry.thinking, "high");
+  });
+
+  it("drops all provider-specific fields when the provider changes", () => {
+    const prev = {
+      provider: "openai",
+      id: "gpt-4o",
+      thinking: "xhigh",
+      baseUrl: "https://x/v1",
+      style: "openai-compatible",
+      authHeader: "X",
+      authPrefix: "Y",
+      apiKey: "secret",
+      backend: "http",
+      transport: "sse",
+      cacheRetention: "short",
+      contextWindow: 128000,
+      maxOutputTokens: 8192,
+      maxRetries: 3,
+      maxRetryDelayMs: 1000,
+      timeoutMs: 300000,
+    };
+    const entry = buildModelConfigEntry(prev, { provider: "anthropic", id: "claude", thinking: "high" });
+    for (const key of [
+      "baseUrl",
+      "style",
+      "authHeader",
+      "authPrefix",
+      "apiKey",
+      "backend",
+      "transport",
+      "cacheRetention",
+      "contextWindow",
+      "maxOutputTokens",
+      "maxRetries",
+      "maxRetryDelayMs",
+      "timeoutMs",
+    ]) {
+      assert.strictEqual(entry[key], undefined, `expected ${key} to be dropped`);
+    }
+    assert.strictEqual(entry.provider, "anthropic");
+    assert.strictEqual(entry.id, "claude");
+    assert.strictEqual(entry.thinking, "high");
+  });
+
+  it("starts from nothing when there is no previous entry", () => {
+    const entry = buildModelConfigEntry(undefined, { provider: "openai", id: "gpt-4o", thinking: "xhigh" });
+    assert.deepStrictEqual(entry, { provider: "openai", id: "gpt-4o", thinking: "xhigh" });
   });
 });
 
