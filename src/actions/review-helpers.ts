@@ -20,7 +20,7 @@ export function getSessionContext(ctx: ExtensionContext): string {
     if (!Array.isArray(entries) || entries.length === 0) return "";
 
     // Exclude the most recent entry because it is the current user/tool turn that
-    // triggered this yoo call; including it would add self-referential noise.
+    // triggered this wai call; including it would add self-referential noise.
     const recent = entries.length > 1 ? entries.slice(-10, -1) : [];
     const lines: string[] = [];
     let total = 0;

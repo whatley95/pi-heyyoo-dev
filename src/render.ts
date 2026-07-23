@@ -105,7 +105,7 @@ export function renderCall(args: WaiToolParams, theme: Theme, context?: ToolRend
   else label = "wai";
 
   const text = getTextComponent(context);
-  text.setText(theme.fg("yoo", label));
+  text.setText(theme.fg("accent", label));
   return text;
 }
 
@@ -138,7 +138,7 @@ export function renderResult(
   }
 
   if (r.plan) {
-    lines.push(theme.fg("yoo", `wai plan${modelSuffix(r.model)}`));
+    lines.push(theme.fg("accent", `wai plan${modelSuffix(r.model)}`));
     lines.push(`  ${r.plan.todo.length} step(s) planned`);
     lines.push(`  ${theme.fg("dim", r.plan.summary)}`);
   }
@@ -184,14 +184,14 @@ export function renderResult(
   }
 
   if (r.suggest) {
-    lines.push(theme.fg("yoo", `wai suggest${modelSuffix(r.model)}`));
+    lines.push(theme.fg("accent", `wai suggest${modelSuffix(r.model)}`));
     for (const a of r.suggest.approaches) {
       lines.push(`  • ${theme.fg("bold", a.title)}`);
     }
   }
 
   if (r.recommend) {
-    lines.push(theme.fg("yoo", `wai recommend${modelSuffix(r.model)}`));
+    lines.push(theme.fg("accent", `wai recommend${modelSuffix(r.model)}`));
     lines.push(`  → ${r.recommend.nextStep}`);
   }
 
@@ -240,7 +240,7 @@ export function renderResult(
   }
 
   if (r.scan) {
-    lines.push(theme.fg("yoo", `wai scan${modelSuffix(r.model)}`));
+    lines.push(theme.fg("accent", `wai scan${modelSuffix(r.model)}`));
     lines.push(`  ${r.scan.files.length} file(s) scanned`);
     lines.push(`  ${theme.fg("dim", `${r.scan.conventions.stack} • ${r.scan.conventions.naming}`)}`);
   }

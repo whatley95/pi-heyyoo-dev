@@ -63,8 +63,6 @@ Add to your Pi agent settings file (usually `~/.pi/agent/settings.json`):
 
 If no secondary model is configured, `wai` returns an error. Configure `pi-yoowai.secondary` in settings.json or use `/wai-model` to pick one interactively. You can also set a different model per wai tool with `taskModels` or `/wai-model`.
 
-**Legacy config key.** The pre-rebrand `pi-heyyoo` key is still merged with `pi-yoowai` as a fallback, with `pi-yoowai` taking precedence and a deprecation warning logged. Runtime state from `.pi/heyyoo` is automatically migrated to `.pi/yoowai` on session start.
-
 **Cost tip:** high-frequency, low-stakes calls do not need a flagship model. Reserve the strong model for `wai.plan`, `wai.review`, and `wai.judge`, and route routine work like `wai.done` (step verification) and `wai.scan` (convention extraction) to a cheap model with thinking off:
 
 ```json
@@ -338,35 +336,6 @@ Recorded facts appear in `wai_index({ topic: "learned" })`.
 | `/wai-clear`                                   | Clear the current session's plan, state, cost, memory, and conventions                 |
 | `/wai-logs`                                    | Show recent error/event log entries for this project                                   |
 | `/wai-clear-logs`                              | Clear the wai error/event log for this project                                         |
-
-### Deprecated aliases
-
-The old `yoo` names still work but print a deprecation warning and will be removed in a future release:
-
-| Command          | Use instead        |
-| ---------------- | ------------------ |
-| `/yoo`           | `/wai`             |
-| `/yoo-status`    | `/wai-status`      |
-| `/yoo-info`      | `/wai-status`      |
-| `/yoo-index`     | `/wai-index`       |
-| `/yoo-explain`   | `/wai-explain`     |
-| `/yoo-learn`     | `/wai-learn`       |
-| `/yoo-search`    | `/wai-search`      |
-| `/yoo-search-config` | `/wai-search-config` |
-| `/yoo-next`      | `/wai-next`        |
-| `/yoo-done`      | `/wai-done`        |
-| `/yoo-plan-update` | `/wai-plan-update` |
-| `/yoo-test`      | `/wai-test`        |
-| `/yoo-backend`   | `/wai-backend`     |
-| `/yoo-model`     | `/wai-model`       |
-| `/yoo-config`    | `/wai-config`      |
-| `/yoo-clear`     | `/wai-clear`       |
-| `/yoo-logs`      | `/wai-logs`        |
-| `/yoo-clear-logs`| `/wai-clear-logs`  |
-| `/yoo-scan`      | `/wai scan`        |
-| `/yoo-scan-deep` | `/wai scan --deep` |
-
-The old tool names `yoo`, `yoo_index`, `yoo_explain`, and `yoo_learn` are also deprecated aliases for `wai`, `wai_index`, `wai_explain`, and `wai_learn`.
 
 ### Review command options
 

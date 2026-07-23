@@ -10,15 +10,15 @@ describe("loop-detector", () => {
   it("does not flag short history", () => {
     const state = createLoopDetectionState();
     for (let i = 0; i < 4; i++) {
-      recordToolCall(state, makeEvent("yoo", { review: "check this" }));
+      recordToolCall(state, makeEvent("wai", { review: "check this" }));
     }
     assert.equal(checkLoop(state), null);
   });
 
-  it("detects repeated yoo.review without edits", () => {
+  it("detects repeated wai.review without edits", () => {
     const state = createLoopDetectionState();
     for (let i = 0; i < 5; i++) {
-      recordToolCall(state, makeEvent("yoo", { review: "check this" }));
+      recordToolCall(state, makeEvent("wai", { review: "check this" }));
     }
     const loop = checkLoop(state);
     assert.ok(loop);
@@ -27,11 +27,11 @@ describe("loop-detector", () => {
 
   it("breaks identical-description streak when action changes", () => {
     const state = createLoopDetectionState();
-    recordToolCall(state, makeEvent("yoo", { review: "same" }));
+    recordToolCall(state, makeEvent("wai", { review: "same" }));
     recordToolCall(state, makeEvent("edit", { path: "x" }));
-    recordToolCall(state, makeEvent("yoo", { review: "same" }));
+    recordToolCall(state, makeEvent("wai", { review: "same" }));
     recordToolCall(state, makeEvent("edit", { path: "x" }));
-    recordToolCall(state, makeEvent("yoo", { judge: "same" }));
+    recordToolCall(state, makeEvent("wai", { judge: "same" }));
     assert.equal(checkLoop(state), null);
   });
 
@@ -39,7 +39,7 @@ describe("loop-detector", () => {
     const state = createLoopDetectionState();
     recordToolCall(state, makeEvent("read_file", { path: "src/a.ts" }));
     for (let i = 0; i < 5; i++) {
-      recordToolCall(state, makeEvent("yoo", { plan: "implement feature" }));
+      recordToolCall(state, makeEvent("wai", { plan: "implement feature" }));
     }
     const loop = checkLoop(state);
     assert.ok(loop);

@@ -11,7 +11,7 @@ export function isLengthStop(reason: unknown): boolean {
 }
 
 export function isYoowaiDebugEnabled(): boolean {
-  const val = process.env.PI_YOOWAI_DEBUG ?? process.env.PI_HEYYOO_DEBUG;
+  const val = process.env.PI_YOOWAI_DEBUG;
   return val === "1" || val === "true";
 }
 

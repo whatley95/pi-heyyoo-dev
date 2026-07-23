@@ -1,4 +1,3 @@
-<!-- From: C:/dev/Project/pi-heyyoo-dev/AGENTS.md -->
 # Agent Guide for pi-yoowai
 
 This file is written for AI coding agents. It assumes no prior knowledge of the project. The project’s README and source code are the authoritative sources; this guide summarizes the structure, commands, conventions, and security model that agents should respect.
@@ -41,27 +40,6 @@ This file is written for AI coding agents. It assumes no prior knowledge of the 
 | `/wai-logs`            | Show recent wai error/event log entries for this project.                                            |
 | `/wai-test`            | Test connectivity to the configured secondary model(s); an optional task name scopes the check.     |
 | `/wai-backend`         | Switch the secondary model backend: `sdk` (default), `pi`, or `http`.                                |
-| `/yoo`                 | Deprecated alias for `/wai`; prints a warning and will be removed in a future release.             |
-| `/yoo-status`          | Deprecated alias for `/wai-status`; prints a warning and will be removed in a future release.      |
-| `/yoo-info`            | Deprecated alias for `/wai-status`; prints a warning and will be removed in a future release.      |
-| `/yoo-index`           | Deprecated alias for `/wai-index`; prints a warning and will be removed in a future release.       |
-| `/yoo-explain`         | Deprecated alias for `/wai-explain`; prints a warning and will be removed in a future release.     |
-| `/yoo-learn`           | Deprecated alias for `/wai-learn`; prints a warning and will be removed in a future release.       |
-| `/yoo-search`          | Deprecated alias for `/wai-search`; prints a warning and will be removed in a future release.      |
-| `/yoo-search-config`   | Deprecated alias for `/wai-search-config`; prints a warning and will be removed in a future release. |
-| `/yoo-next`            | Deprecated alias for `/wai-next`; prints a warning and will be removed in a future release.        |
-| `/yoo-done`            | Deprecated alias for `/wai-done`; prints a warning and will be removed in a future release.        |
-| `/yoo-plan-update`     | Deprecated alias for `/wai-plan-update`; prints a warning and will be removed in a future release. |
-| `/yoo-test`            | Deprecated alias for `/wai-test`; prints a warning and will be removed in a future release.        |
-| `/yoo-backend`         | Deprecated alias for `/wai-backend`; prints a warning and will be removed in a future release.     |
-| `/yoo-config`          | Deprecated alias for `/wai-config`; prints a warning and will be removed in a future release.      |
-| `/yoo-clear`           | Deprecated alias for `/wai-clear`; prints a warning and will be removed in a future release.       |
-| `/yoo-logs`            | Deprecated alias for `/wai-logs`; prints a warning and will be removed in a future release.        |
-| `/yoo-clear-logs`      | Deprecated alias for `/wai-clear-logs`; prints a warning and will be removed in a future release.  |
-| `/yoo-scan`            | Deprecated alias for `/wai scan`; prints a warning and will be removed in a future release.       |
-| `/yoo-scan-deep`       | Deprecated alias for `/wai scan --deep`; prints a warning and will be removed in a future release. |
-
-The old tool names `yoo`, `yoo_index`, `yoo_explain`, and `yoo_learn` are also deprecated aliases for `wai`, `wai_index`, `wai_explain`, and `wai_learn`.
 
 ---
 
@@ -325,10 +303,10 @@ Test files are co-located with the source modules they cover (`src/**/*.test.ts`
 
 ### Configuration sources
 
-`src/config.ts` merges two JSON files, with project settings overriding global settings. Both the current `pi-yoowai` key and the legacy `pi-heyyoo` key are merged, with `pi-yoowai` taking precedence and a deprecation warning logged for any legacy key:
+`src/config.ts` merges two JSON files, with project settings overriding global settings. Only the `pi-yoowai` key is read:
 
-1. `~/.pi/agent/settings.json` → `pi-yoowai` object (merged with `pi-heyyoo` as a legacy fallback).
-2. `<cwd>/.pi/settings.json` → `pi-yoowai` object (merged with `pi-heyyoo` as a legacy fallback).
+1. `~/.pi/agent/settings.json` → `pi-yoowai` object.
+2. `<cwd>/.pi/settings.json` → `pi-yoowai` object.
 
 Relevant keys:
 

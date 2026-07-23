@@ -15,7 +15,7 @@ import {
   type LoopDetectionState,
 } from "./loop-detector.js";
 import { createProgressReporter, clearWaiStatus } from "./progress.js";
-import { setSessionId, clearSessionId, pruneSessionDirs, migrateLegacyState } from "./session-scope.js";
+import { setSessionId, clearSessionId, pruneSessionDirs } from "./session-scope.js";
 import { validateWaiToolParams } from "./wai-tool-params.js";
 import {
   recordLearnedFact,
@@ -50,8 +50,6 @@ import { registerWaiShortcuts } from "./integration/shortcuts.js";
 import { updateWaiPlanWidget, hideWaiPlanWidget } from "./integration/widget.js";
 import { registerWaiProvider, unregisterWaiProvider } from "./integration/provider.js";
 
-const DEPRECATION_WARNING = "**Deprecation warning:** the `yoo` tool name is deprecated. Use `wai` instead.\n\n";
-
 const loopStates = new Map<string, LoopDetectionState>();
 function getLoopState(cwd: string): LoopDetectionState {
   let state = loopStates.get(cwd);
@@ -66,9 +64,6 @@ export default async function (pi: ExtensionAPI) {
   setAuditExtensionAPI(pi);
 
   pi.on("session_start", async (_event, ctx) => {
-    // Migrate pre-rebrand runtime state before any reads/writes.
-    migrateLegacyState(ctx.cwd);
-
     // Probe sessionManager once; it may be unavailable in some Pi versions.
     let sessionId: string | undefined;
     try {
@@ -396,46 +391,6 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
-    name: "yoo",
-    label: "Yoo — Pair Programmer (deprecated alias for wai)",
-    description:
-      "Deprecated alias for the wai tool. Use wai for the same second-opinion workflow. This alias will be removed in a future release.",
-    promptSnippet:
-      "yoo: always get a second opinion from the secondary model before acting on code or making architectural decisions",
-    promptGuidelines: ["Deprecated: use wai instead of yoo. This alias will be removed in a future release."],
-    parameters: Type.Object({
-      plan: Type.Optional(Type.String()),
-      review: Type.Optional(Type.String()),
-      suggest: Type.Optional(Type.String()),
-      recommend: Type.Optional(Type.String()),
-      judge: Type.Optional(Type.String()),
-      scan: Type.Optional(Type.Boolean()),
-      test: Type.Optional(Type.String()),
-      security: Type.Optional(Type.String()),
-      done: Type.Optional(Type.Union([Type.Boolean(), Type.String(), Type.Number()])),
-      planUpdate: Type.Optional(Type.Union([Type.Boolean(), Type.String()])),
-      files: Type.Optional(Type.Array(Type.String())),
-      exclude: Type.Optional(Type.Array(Type.String())),
-      revision: Type.Optional(Type.String()),
-      since: Type.Optional(Type.String()),
-      vcs: Type.Optional(Type.Union([Type.Literal("git"), Type.Literal("svn")])),
-      untracked: Type.Optional(Type.Boolean()),
-      docs: Type.Optional(Type.Array(Type.String())),
-      verify: Type.Optional(Type.Boolean()),
-    }),
-    renderCall,
-    renderResult,
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const inner = await runWaiTool(params, signal, onUpdate as ((update: unknown) => void) | undefined, ctx);
-      const deprecationText = `${DEPRECATION_WARNING}${inner.content[0]?.type === "text" ? inner.content[0].text : ""}`;
-      return {
-        ...inner,
-        content: [{ type: "text", text: deprecationText }],
-      };
-    },
-  });
-
   async function runWaiIndexTool(
     params: unknown,
     ctx: ExtensionContext,
@@ -519,40 +474,6 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
-    name: "yoo_index",
-    label: "Yoo Index — Project Context (deprecated alias for wai_index)",
-    description:
-      "Deprecated alias for wai_index. Retrieves stored project context. Use wai_index instead; this alias will be removed in a future release.",
-    promptSnippet: "yoo_index: deprecated alias for wai_index",
-    promptGuidelines: ["Deprecated: use wai_index instead of yoo_index."],
-    parameters: Type.Object({
-      topic: Type.Optional(
-        Type.Union([
-          Type.Literal("all"),
-          Type.Literal("plan"),
-          Type.Literal("memory"),
-          Type.Literal("conventions"),
-          Type.Literal("cost"),
-          Type.Literal("logs"),
-          Type.Literal("index"),
-          Type.Literal("learned"),
-        ]),
-      ),
-      files: Type.Optional(Type.Array(Type.String())),
-      query: Type.Optional(Type.String()),
-      update: Type.Optional(Type.Boolean()),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const inner = await runWaiIndexTool(params, ctx);
-      const deprecationText = `${DEPRECATION_WARNING}${inner.content[0]?.type === "text" ? inner.content[0].text : ""}`;
-      return {
-        ...inner,
-        content: [{ type: "text", text: deprecationText }],
-      };
-    },
-  });
-
   async function runWaiExplainTool(
     params: unknown,
     signal: AbortSignal | undefined,
@@ -620,29 +541,6 @@ export default async function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       return runWaiExplainTool(params, signal, ctx);
-    },
-  });
-
-  pi.registerTool({
-    name: "yoo_explain",
-    label: "Yoo Explain — Code & Error Explanations (deprecated alias for wai_explain)",
-    description:
-      "Deprecated alias for wai_explain. Use wai_explain instead; this alias will be removed in a future release.",
-    promptSnippet: "yoo_explain: deprecated alias for wai_explain",
-    promptGuidelines: ["Deprecated: use wai_explain instead of yoo_explain."],
-    parameters: Type.Object({
-      target: Type.Optional(Type.String()),
-      context: Type.Optional(Type.String()),
-      files: Type.Optional(Type.Array(Type.String())),
-      docs: Type.Optional(Type.Array(Type.String())),
-    }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const inner = await runWaiExplainTool(params, signal, ctx);
-      const deprecationText = `${DEPRECATION_WARNING}${inner.content[0]?.type === "text" ? inner.content[0].text : ""}`;
-      return {
-        ...inner,
-        content: [{ type: "text", text: deprecationText }],
-      };
     },
   });
 
@@ -771,31 +669,6 @@ export default async function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       return runWaiLearnTool(params, signal, ctx);
-    },
-  });
-
-  pi.registerTool({
-    name: "yoo_learn",
-    label: "Yoo Learn — Project Facts (deprecated alias for wai_learn)",
-    description:
-      "Deprecated alias for wai_learn. Use wai_learn instead; this alias will be removed in a future release.",
-    promptSnippet: "yoo_learn: deprecated alias for wai_learn",
-    promptGuidelines: ["Deprecated: use wai_learn instead of yoo_learn."],
-    parameters: Type.Object({
-      fact: Type.Optional(Type.String()),
-      category: Type.Optional(Type.String()),
-      source: Type.Optional(Type.String()),
-      verify: Type.Optional(Type.Boolean()),
-      query: Type.Optional(Type.String()),
-      deep: Type.Optional(Type.Boolean()),
-    }),
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const inner = await runWaiLearnTool(params, signal, ctx);
-      const deprecationText = `${DEPRECATION_WARNING}${inner.content[0]?.type === "text" ? inner.content[0].text : ""}`;
-      return {
-        ...inner,
-        content: [{ type: "text", text: deprecationText }],
-      };
     },
   });
 

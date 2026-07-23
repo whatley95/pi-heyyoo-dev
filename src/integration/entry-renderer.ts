@@ -46,7 +46,16 @@ function formatEntry(entry: WaiAuditEntry): string {
   return lines.join("\n");
 }
 
+let textClassLoaderOverride: (() => Promise<TextConstructor | undefined>) | undefined;
+
+/** Test hook: override the pi-tui Text class loader so tests do not depend on
+ *  whether the optional pi-tui peer dependency happens to be installed. */
+export function setTextClassLoaderOverride(fn: (() => Promise<TextConstructor | undefined>) | null): void {
+  textClassLoaderOverride = fn ?? undefined;
+}
+
 async function loadTextClass(): Promise<TextConstructor | undefined> {
+  if (textClassLoaderOverride) return textClassLoaderOverride();
   try {
     const mod = await import("@earendil-works/pi-tui");
     return mod.Text as TextConstructor;

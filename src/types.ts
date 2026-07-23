@@ -24,7 +24,7 @@ export interface YoowaiConfig {
   secondaryFallback?: import("./types/secondary-model.js").SecondaryModelConfig[];
   autoJudge?: boolean;
   preReviewCommands?: string[];
-  /** Custom command to run for yoo.test analysis (e.g. "npm test"). If omitted, yoo.test will auto-detect or fall back to static diff analysis. */
+  /** Custom command to run for wai.test analysis (e.g. "npm test"). If omitted, wai.test will auto-detect or fall back to static diff analysis. */
   testCommand?: string;
   costBudgetUsd?: number;
   reviewMaxDiffChars?: number;
@@ -44,7 +44,7 @@ export interface YoowaiConfig {
   deepScan?: boolean | number;
   /** Per-model token-budget overrides. Key is the model id (e.g. "qwen3.7-max"). */
   modelInfo?: Record<string, { contextWindow?: number; maxOutputTokens?: number }>;
-  /** Optional documentation sources and web-search settings for yoo.suggest/recommend/explain. */
+  /** Optional documentation sources and web-search settings for wai.suggest/recommend/explain. */
   docs?: import("./types/docs.js").DocsConfig;
   /** Timeout in ms for child pi process calls (default 300000 = 5 min). */
   processTimeoutMs?: number;
@@ -52,7 +52,7 @@ export interface YoowaiConfig {
   testTimeoutMs?: number;
   /** Maximum continuation calls when a secondary-model response is length-truncated (default 3). */
   maxContinuations?: number;
-  /** Verify yoo.done claims against the diff before advancing the tracker. Default true. */
+  /** Verify wai.done claims against the diff before advancing the tracker. Default true. */
   verifyDoneClaims?: boolean;
   /** Number of file edits since last review before showing a workflow reminder. Default 3. */
   reviewReminderEdits?: number;

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { getProjectConfigPath } from "./pi-paths.js";
-import { logEvent } from "./logger.js";
 
 const sessionIds = new Map<string, string>();
 
@@ -21,26 +20,6 @@ export function getSessionId(cwd: string): string | undefined {
 
 export function clearSessionId(cwd: string): void {
   sessionIds.delete(cwd);
-}
-
-/**
- * One-time migration of pre-rebrand runtime state from `.pi/heyyoo/` to
- * `.pi/yoowai/`. Runs on session start before any state is read/written.
- * Best-effort: failures are logged and ignored so startup is not blocked.
- */
-export function migrateLegacyState(cwd: string): void {
-  const legacyPath = getProjectConfigPath(cwd, "heyyoo");
-  const currentPath = getProjectConfigPath(cwd, "yoowai");
-  if (!existsSync(legacyPath) || existsSync(currentPath)) return;
-
-  try {
-    renameSync(legacyPath, currentPath);
-    logEvent(cwd, "info", "Migrated legacy state from .pi/heyyoo to .pi/yoowai", {});
-  } catch (err) {
-    logEvent(cwd, "warn", "Failed to migrate legacy .pi/heyyoo state", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 /**

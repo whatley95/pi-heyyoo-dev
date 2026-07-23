@@ -226,20 +226,4 @@ describe("loadYoowaiConfig docs", () => {
     const config = loadYoowaiConfig(cwd);
     assert.deepEqual(config.docs?.sources, { react: "https://react.dev" });
   });
-
-  it("falls back to legacy pi-heyyoo config key", () => {
-    const cwd = makeTempDir("config-legacy-key-");
-    tmpDirs.push(cwd);
-    const piDir = join(cwd, ".pi");
-    mkdirSync(piDir, { recursive: true });
-    writeFileSync(
-      join(piDir, "settings.json"),
-      JSON.stringify({ "pi-heyyoo": { secondary: { provider: "anthropic", id: "claude-sonnet-4" } } }, null, 2),
-      "utf-8",
-    );
-
-    const config = loadYoowaiConfig(cwd);
-    assert.equal(config.secondary.provider, "anthropic");
-    assert.equal(config.secondary.id, "claude-sonnet-4");
-  });
 });

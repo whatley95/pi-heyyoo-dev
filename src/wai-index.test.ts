@@ -42,7 +42,7 @@ describe("wai-index", () => {
       editsSinceLastReview: 0,
       editsSinceLastDone: 0,
       plan: {
-        summary: "Add yoo index",
+        summary: "Add wai index",
         todo: ["Define types", "Implement function", "Add tests"],
         acceptanceCriteria: ["All tests pass"],
       },
@@ -70,7 +70,7 @@ describe("wai-index", () => {
     assert.ok(result.conventions, "should include conventions");
     assert.equal(result.conventions?.stack, "TypeScript");
     assert.ok(result.plan, "should include plan");
-    assert.equal(result.plan?.summary, "Add yoo index");
+    assert.equal(result.plan?.summary, "Add wai index");
     assert.ok(result.memory, "should include memory");
     assert.match(result.memory!, /bug/);
     assert.ok(result.cost, "should include cost");

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import type { ExtensionAPI, CustomEntry, EntryRenderOptions, Theme } from "@earendil-works/pi-coding-agent";
-import { registerWaiEntryRenderer, type TextConstructor } from "./entry-renderer.js";
+import { registerWaiEntryRenderer, setTextClassLoaderOverride, type TextConstructor } from "./entry-renderer.js";
 import type { WaiAuditEntry } from "./audit.js";
 
 type RendererFn = (entry: CustomEntry<WaiAuditEntry>, options: EntryRenderOptions, theme: Theme) => unknown;
@@ -143,8 +143,15 @@ describe("registerWaiEntryRenderer", () => {
   });
 
   it("is a no-op when pi-tui is unavailable and no textClass is provided", async () => {
-    const { pi, getRenderer } = createFakePi();
-    await registerWaiEntryRenderer(pi);
-    assert.strictEqual(getRenderer(), undefined);
+    // Simulate pi-tui being absent (loader returns undefined), independent of
+    // whether the optional peer dependency is installed in this environment.
+    setTextClassLoaderOverride(() => Promise.resolve(undefined));
+    try {
+      const { pi, getRenderer } = createFakePi();
+      await registerWaiEntryRenderer(pi);
+      assert.strictEqual(getRenderer(), undefined);
+    } finally {
+      setTextClassLoaderOverride(null);
+    }
   });
 });

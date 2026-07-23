@@ -120,13 +120,6 @@ export function loadYoowaiConfig(cwd: string): YoowaiConfig {
         checkUnknownKeys(global["pi-yoowai"], "global", cwd);
         config = mergeConfig(config, global["pi-yoowai"]);
       }
-      if (global["pi-heyyoo"]) {
-        logEvent(cwd, "warn", "Deprecated config key pi-heyyoo detected in global settings; use pi-yoowai", {
-          path: globalPath,
-        });
-        checkUnknownKeys(global["pi-heyyoo"], "global", cwd);
-        config = mergeConfig(config, global["pi-heyyoo"]);
-      }
     } catch (err) {
       logEvent(cwd, "warn", "Failed to parse global wai settings", {
         error: err instanceof Error ? err.message : String(err),
@@ -141,13 +134,6 @@ export function loadYoowaiConfig(cwd: string): YoowaiConfig {
       if (project["pi-yoowai"]) {
         checkUnknownKeys(project["pi-yoowai"], "project", cwd);
         config = mergeConfig(config, project["pi-yoowai"]);
-      }
-      if (project["pi-heyyoo"]) {
-        logEvent(cwd, "warn", "Deprecated config key pi-heyyoo detected in project settings; use pi-yoowai", {
-          path: projectPath,
-        });
-        checkUnknownKeys(project["pi-heyyoo"], "project", cwd);
-        config = mergeConfig(config, project["pi-heyyoo"]);
       }
     } catch (err) {
       logEvent(cwd, "warn", "Failed to parse project wai settings", {

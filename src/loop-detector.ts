@@ -38,14 +38,14 @@ export function recordToolCall(state: LoopDetectionState, event: unknown): void 
 }
 
 function isWaiToolName(toolName: string): boolean {
-  return toolName === "wai" || toolName === "yoo" || toolName.startsWith("wai_") || toolName.startsWith("yoo_");
+  return toolName === "wai" || toolName.startsWith("wai_");
 }
 
 export function checkLoop(state: LoopDetectionState): { looping: boolean; message: string } | null {
   const calls = state.recentCalls;
   if (calls.length < 5) return null;
 
-  // Pattern 1: wai/yoo called 5+ times in a row without other tools doing real work
+  // Pattern 1: wai called 5+ times in a row without other tools doing real work
   const recentWai = calls.slice(-5);
   const waiCalls = recentWai.filter((c) => isWaiToolName(c.toolName));
   const nonWaiCalls = recentWai.filter((c) => !isWaiToolName(c.toolName));

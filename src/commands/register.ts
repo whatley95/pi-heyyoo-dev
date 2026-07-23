@@ -48,8 +48,6 @@ import { planStepDescription } from "../types.js";
 import type { SecondaryModelConfig, WaiToolResult, WaiModelTask, WaiAction } from "../types.js";
 import type { LoopDetectionState } from "../loop-detector.js";
 
-const DEPRECATION_PREFIX = "Deprecated alias; prefer ";
-
 export interface ModelThinkingDetails {
   reasoning?: boolean;
   thinkingLevelMap?: Partial<Record<string, string | null>>;
@@ -326,14 +324,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: waiHandler,
   });
 
-  pi.registerCommand("yoo", {
-    description: `${DEPRECATION_PREFIX}/wai. Run a wai action or show status via the deprecated yoo alias.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo is deprecated; use /wai instead.", "warning");
-      await waiHandler(args, ctx);
-    },
-  });
-
   const configHandler = async (args: string, ctx: ExtensionCommandContext) => {
     const agentDir = getAgentDir();
     const settingsPath = join(agentDir, "settings.json");
@@ -503,14 +493,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     description:
       "View or edit pi-yoowai settings. Usage: /wai-config [get|set|list] [key] [value], or /wai-config <provider.model>",
     handler: configHandler,
-  });
-
-  pi.registerCommand("yoo-config", {
-    description: `${DEPRECATION_PREFIX}/wai-config. View or edit pi-yoowai settings via the deprecated yoo alias.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-config is deprecated; use /wai-config instead.", "warning");
-      await configHandler(args, ctx);
-    },
   });
 
   const modelHandler = async (_args: string, ctx: ExtensionContext) => {
@@ -696,14 +678,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: modelHandler,
   });
 
-  pi.registerCommand("yoo-model", {
-    description: `${DEPRECATION_PREFIX}/wai-model. Pick the secondary model via the deprecated yoo alias.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-model is deprecated; use /wai-model instead.", "warning");
-      await modelHandler(args, ctx);
-    },
-  });
-
   const statusHandler = async (_args: string, ctx: ExtensionContext) => {
     await showWaiStatus(ctx);
   };
@@ -711,22 +685,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
   pi.registerCommand("wai-status", {
     description: "Show detailed wai status (config, plan, VCS, conventions, memory)",
     handler: statusHandler,
-  });
-
-  pi.registerCommand("yoo-status", {
-    description: `${DEPRECATION_PREFIX}/wai-status.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-status is deprecated; use /wai-status instead.", "warning");
-      await statusHandler(args, ctx);
-    },
-  });
-
-  pi.registerCommand("yoo-info", {
-    description: `${DEPRECATION_PREFIX}/wai-status.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-info is deprecated; use /wai-status instead.", "warning");
-      await statusHandler(args, ctx);
-    },
   });
 
   const indexHandler = async (args: string, ctx: ExtensionCommandContext) => {
@@ -745,14 +703,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     description:
       "Read stored wai project context. Usage: /wai-index [all|plan|memory|conventions|cost|logs|index|learned] [--update]",
     handler: indexHandler,
-  });
-
-  pi.registerCommand("yoo-index", {
-    description: `${DEPRECATION_PREFIX}/wai-index.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-index is deprecated; use /wai-index instead.", "warning");
-      await indexHandler(args, ctx);
-    },
   });
 
   const explainHandler = async (args: string, ctx: ExtensionCommandContext) => {
@@ -789,14 +739,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: explainHandler,
   });
 
-  pi.registerCommand("yoo-explain", {
-    description: `${DEPRECATION_PREFIX}/wai-explain.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-explain is deprecated; use /wai-explain instead.", "warning");
-      await explainHandler(args, ctx);
-    },
-  });
-
   const searchHandler = async (args: string, ctx: ExtensionCommandContext) => {
     const result = await handleWaiSearchCommand(args, ctx);
     const text = result.content[0]?.text ?? "";
@@ -806,14 +748,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
   pi.registerCommand("wai-search", {
     description: "Search the web: /wai-search <query>",
     handler: searchHandler,
-  });
-
-  pi.registerCommand("yoo-search", {
-    description: `${DEPRECATION_PREFIX}/wai-search.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-search is deprecated; use /wai-search instead.", "warning");
-      await searchHandler(args, ctx);
-    },
   });
 
   const searchConfigHandler = async (args: string, ctx: ExtensionCommandContext) => {
@@ -826,14 +760,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     description:
       "Configure web search provider. Usage: /wai-search-config (interactive) or /wai-search-config brave <api-key>",
     handler: searchConfigHandler,
-  });
-
-  pi.registerCommand("yoo-search-config", {
-    description: `${DEPRECATION_PREFIX}/wai-search-config.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-search-config is deprecated; use /wai-search-config instead.", "warning");
-      await searchConfigHandler(args, ctx);
-    },
   });
 
   const learnHandler = async (args: string, ctx: ExtensionCommandContext) => {
@@ -900,14 +826,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: learnHandler,
   });
 
-  pi.registerCommand("yoo-learn", {
-    description: `${DEPRECATION_PREFIX}/wai-learn.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-learn is deprecated; use /wai-learn instead.", "warning");
-      await learnHandler(args, ctx);
-    },
-  });
-
   const clearHandler = async (_args: string, ctx: ExtensionContext) => {
     dropSessionState(ctx.cwd);
     loopStates.delete(ctx.cwd);
@@ -931,14 +849,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: clearHandler,
   });
 
-  pi.registerCommand("yoo-clear", {
-    description: `${DEPRECATION_PREFIX}/wai-clear.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-clear is deprecated; use /wai-clear instead.", "warning");
-      await clearHandler(args, ctx);
-    },
-  });
-
   const nextHandler = async (_args: string, ctx: ExtensionContext) => {
     const signal = undefined;
     const planProgress = getProgress(ctx.cwd);
@@ -960,14 +870,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
   pi.registerCommand("wai-next", {
     description: "Recommend the next step based on the active wai plan",
     handler: nextHandler,
-  });
-
-  pi.registerCommand("yoo-next", {
-    description: `${DEPRECATION_PREFIX}/wai-next.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-next is deprecated; use /wai-next instead.", "warning");
-      await nextHandler(args, ctx);
-    },
   });
 
   const doneHandler = async (_args: string, ctx: ExtensionContext) => {
@@ -997,14 +899,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: doneHandler,
   });
 
-  pi.registerCommand("yoo-done", {
-    description: `${DEPRECATION_PREFIX}/wai-done.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-done is deprecated; use /wai-done instead.", "warning");
-      await doneHandler(args, ctx);
-    },
-  });
-
   const planUpdateHandler = async (args: string, ctx: ExtensionCommandContext) => {
     const signal = undefined;
     const description = args.trim();
@@ -1029,14 +923,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: planUpdateHandler,
   });
 
-  pi.registerCommand("yoo-plan-update", {
-    description: `${DEPRECATION_PREFIX}/wai-plan-update.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-plan-update is deprecated; use /wai-plan-update instead.", "warning");
-      await planUpdateHandler(args, ctx);
-    },
-  });
-
   const logsHandler = async (_args: string, ctx: ExtensionContext) => {
     const entries = readRecentLogs(ctx.cwd, 50);
     if (entries.length === 0) {
@@ -1051,14 +937,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: logsHandler,
   });
 
-  pi.registerCommand("yoo-logs", {
-    description: `${DEPRECATION_PREFIX}/wai-logs.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-logs is deprecated; use /wai-logs instead.", "warning");
-      await logsHandler(args, ctx);
-    },
-  });
-
   const clearLogsHandler = async (_args: string, ctx: ExtensionContext) => {
     clearLogs(ctx.cwd);
     ctx.ui.notify("wai log cleared.", "info");
@@ -1067,14 +945,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
   pi.registerCommand("wai-clear-logs", {
     description: "Clear the wai error/event log for this project",
     handler: clearLogsHandler,
-  });
-
-  pi.registerCommand("yoo-clear-logs", {
-    description: `${DEPRECATION_PREFIX}/wai-clear-logs.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-clear-logs is deprecated; use /wai-clear-logs instead.", "warning");
-      await clearLogsHandler(args, ctx);
-    },
   });
 
   const testHandler = async (args: string, ctx: ExtensionCommandContext) => {
@@ -1310,82 +1180,6 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
     handler: testHandler,
   });
 
-  pi.registerCommand("yoo-test", {
-    description: `${DEPRECATION_PREFIX}/wai-test.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-test is deprecated; use /wai-test instead.", "warning");
-      await testHandler(args, ctx);
-    },
-  });
-
-  const scanHandler = async (_args: string, ctx: ExtensionContext) => {
-    const signal = undefined;
-    const progress = createProgressReporter("scan", ctx);
-    const notifyProgress = (stage: number, total: number, message: string) => {
-      progress(stage, total, message);
-      ctx.ui.notify(`[${stage}/${total}] ${message}`, "info");
-    };
-
-    let result: WaiToolResult;
-    try {
-      result = await executeWaiScan(ctx.cwd, signal, notifyProgress, ctx.sessionManager);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logEvent(ctx.cwd, "error", "wai scan command failed", { error: message });
-      ctx.ui.notify(`wai scan error: ${message}`, "error");
-      return;
-    } finally {
-      clearWaiStatus(ctx);
-    }
-
-    publishWaiResult(ctx, result);
-
-    const text = formatResultText(result);
-    ctx.ui.notify(text.slice(0, 500), result.error ? "error" : "info");
-  };
-
-  pi.registerCommand("yoo-scan", {
-    description: `${DEPRECATION_PREFIX}/wai scan — scan project conventions`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-scan is deprecated; use /wai scan instead.", "warning");
-      await scanHandler(args, ctx);
-    },
-  });
-
-  const scanDeepHandler = async (_args: string, ctx: ExtensionContext) => {
-    const signal = undefined;
-    const progress = createProgressReporter("scan", ctx);
-    const notifyProgress = (stage: number, total: number, message: string) => {
-      progress(stage, total, message);
-      ctx.ui.notify(`[${stage}/${total}] ${message}`, "info");
-    };
-
-    let result: WaiToolResult;
-    try {
-      result = await executeWaiScan(ctx.cwd, signal, notifyProgress, ctx.sessionManager, true);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logEvent(ctx.cwd, "error", "wai scan-deep command failed", { error: message });
-      ctx.ui.notify(`wai scan-deep error: ${message}`, "error");
-      return;
-    } finally {
-      clearWaiStatus(ctx);
-    }
-
-    publishWaiResult(ctx, result);
-
-    const text = formatResultText(result);
-    ctx.ui.notify(text.slice(0, 500), result.error ? "error" : "info");
-  };
-
-  pi.registerCommand("yoo-scan-deep", {
-    description: `${DEPRECATION_PREFIX}/wai scan --deep`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-scan-deep is deprecated; use /wai scan --deep instead.", "warning");
-      await scanDeepHandler(args, ctx);
-    },
-  });
-
   const backendHandler = async (args: string, ctx: ExtensionCommandContext) => {
     const config = loadYoowaiConfig(ctx.cwd);
     const VALID_BACKENDS = ["sdk", "pi", "http"] as const;
@@ -1432,13 +1226,5 @@ export function registerWaiCommands(pi: ExtensionAPI, loopStates: Map<string, Lo
   pi.registerCommand("wai-backend", {
     description: "Switch secondary model backend: sdk (default), pi, or http",
     handler: backendHandler,
-  });
-
-  pi.registerCommand("yoo-backend", {
-    description: `${DEPRECATION_PREFIX}/wai-backend.`,
-    handler: async (args, ctx) => {
-      ctx.ui.notify("/yoo-backend is deprecated; use /wai-backend instead.", "warning");
-      await backendHandler(args, ctx);
-    },
   });
 }
